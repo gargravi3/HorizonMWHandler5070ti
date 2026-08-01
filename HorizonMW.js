@@ -950,18 +950,31 @@ Game.Play = function () {
   // Raising the pagefile raises that limit. Graphics presets barely move private
   // bytes, which is why selecting Low did not help.
   //
-  // The second ceiling is video memory, and it is real but further off: two
-  // instances at 1440p on Default held 11621 MiB of 16303 MiB, about 5.5 GB
-  // each, leaving a third roughly 780 MiB short. Low drops r_picmip, _bump and
-  // _spec to 3 and each level quarters a texture's memory, so it clears that
-  // easily. Resolution does not, because the instances tile one screen: 1080p
-  // saves about 31 MiB per instance of render targets.
+  // Video memory looks like a second ceiling and, on the evidence, is not one. The
+  // card sits at 96-97% with four instances whatever the settings are, measured with
+  // per-process Dedicated Usage:
+  //
+  //     Low     4 up, 1440p render      3,791 MiB each   card 15,718 of 16,303
+  //     Low     4 up, 540p render       3,806 MiB each   card 15,796
+  //     Minimum 4 up, shadows off       3,810 MiB each   card 15,789
+  //
+  // Cutting the render to a seventh of the pixels and then turning shadows off each
+  // moved it by under 1%, so ~3.8 GB per instance is not a requirement the settings
+  // can reduce; it looks like the game or driver filling what is free with evictable
+  // caches. The same game ran four instances on an 11 GB 2080 Ti, which fits that
+  // reading and does not fit a 3.8 GB requirement.
+  //
+  // Do not tell the user a full card is the problem, and do not send them to the
+  // Graphics dropdown for it. Physical RAM is the pressure that is real: four
+  // instances at ~11 GB private each on 31.2 GB sat at 98% with working sets already
+  // being trimmed unevenly.
   if (Context.PlayerID >= 2) {
-    hmwLog("NOTE instance " + (Context.PlayerID + 1) + ": 3+ instances need both " +
-           "commit headroom (~12.6 GB each, so check the pagefile) and video " +
-           "memory headroom. Dying about 30 seconds in with no window means " +
-           "commit; dying later or rendering badly means the Graphics preset " +
-           "is too high.");
+    hmwLog("NOTE instance " + (Context.PlayerID + 1) + ": 3+ instances need commit " +
+           "headroom (~11 GB private each, so check the pagefile) and physical RAM. " +
+           "Dying about 30 seconds in with no window means commit. Video memory is " +
+           "NOT settings-sensitive here: Low, Minimum and a quarter-resolution " +
+           "render all measured ~3.8 GB per instance, so a black screen or a hang " +
+           "is more likely RAM or a failed injection than the Graphics preset.");
   }
   hmwLog("windowed; Nucleus slice " + Context.Width + "x" + Context.Height +
     " at " + Context.PosX + "," + Context.PosY);
