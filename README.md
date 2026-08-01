@@ -205,6 +205,31 @@ to how it started with no stray `.nucleus-original` files.
 
 Still broken in that run: the F2 host-join. See the next section.
 
+## Session 3 (1 Aug 2026, 00:22) - F2 host-join working
+
+Full working multiplayer: two instances, isolated saves and identities, per-instance controllers,
+and the guest joining the host on one keypress. Watcher log:
+
+```
+[00:22:18] watcher started, pid 6252, variant KeysToggle
+[00:23:41] connecting 1 guest(s) using KeysToggle: instances 1
+[00:23:41]   instance 1 pid 6964 hwnd 1247502
+[00:23:45] done
+```
+
+Compare the same code path in session 2:
+
+```
+[00:08:31] F2: connecting guests 0, 1
+[00:08:31]   instance 0 1 pid 4184 22428
+[00:08:31] restored hwgd.pf          <- mid-session, the bug
+```
+
+Every symptom is gone. One guest instead of a nested array, instance 1 only so the host is no
+longer told to connect to itself, a single pid and a single window handle, and no identity
+restore during the session. Start to finish in 4 s for one guest, which matches the per-guest
+budget of 500 + 200 + 1000 + 750 ms plus focus time.
+
 ### Why F2 did nothing, and the fix
 
 The watcher log gave it away:
