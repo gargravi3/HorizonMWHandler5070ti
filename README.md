@@ -230,6 +230,67 @@ longer told to connect to itself, a single pid and a single window handle, and n
 restore during the session. Start to finish in 4 s for one guest, which matches the per-guest
 budget of 500 + 200 + 1000 + 750 ms plus focus time.
 
+## Session 4 - the second instance was cut off at the split boundary
+
+The handler set `Game.SupportsPositioning` and `Game.ResetWindows` and left it there, writing no
+resolution dvars at all. Both instances were therefore launching with the config they inherited
+from the install:
+
+```
+seta r_fullscreen       "1"
+seta r_fullscreenWindow "1"
+seta r_mode             "2560x1440"
+```
+
+On this single 2560x1440 monitor that means each instance rendered a full-screen 2560x1440
+backbuffer. Nucleus moved and resized the *window*, but the game kept rendering full-screen, so
+for a horizontal 2-way split the second instance's window sits at y=720 with a 1440-tall client
+area and everything below the split boundary is off-screen. Positioning alone cannot fix that;
+the game has to be told to render smaller.
+
+`hmwApplyViewport` now writes, on every launch:
+
+| dvar | value | why |
+| --- | --- | --- |
+| `r_mode` | `<Width>x<Height>` | HMW stores resolution as one `WxH` string, not a width and a height dvar |
+| `r_fullscreen` | `0` | windowed, so the window can be sized to the slice |
+| `r_fullscreenWindow` | `0` | not borderless-fullscreen |
+| `r_aspectRatio` | `auto` | a 2560x720 slice is not 16:9 |
+| `r_renderResolutionNative` | `1` | see below |
+| `vid_xpos` / `vid_ypos` | `PosX` / `PosY` | correct on the first frame instead of waiting for Nucleus to move it |
+
+Two things worth knowing:
+
+- **`r_renderResolution` is a megapixel count**, not a scale. The install had `"3.6864"`, which is
+  exactly 2560x1440 / 1e6. Editing it per instance would mean recomputing that float, so
+  `r_renderResolutionNative "1"` pins the render resolution to the window instead and the stale
+  value is left alone.
+- **The Nucleus properties are `Context.PosX` and `Context.PosY`**, not `PositionX`/`PositionY`.
+  Confirmed by reflection over `Nucleus.Gaming.dll`; `readme.txt` documents neither.
+
+Rewritten on every launch rather than only when `players2` is seeded, because HMW saves
+`config_mp.cfg` on exit and the split geometry changes with the player count and layout.
+
+If the instances come up with a visible title bar stealing pixels, the first thing to try is
+`r_fullscreenWindow "1"` with `r_fullscreen "0"`; on this engine that pairing is what usually
+yields a borderless window. Nucleus's own `ResetWindows` handles border removal today, which is
+why it is off.
+
+### Testing this without launching the game
+
+The viewport logic is a pure function of the four Nucleus numbers, so the suite drives it
+directly, including the two mistakes that would otherwise ship silently:
+
+- **dvar prefix collisions.** `hmwSetCfgValue` matches on `key + " "`, so `seta r_fullscreen `
+  must not also match `seta r_fullscreenWindow `, and `seta r_renderResolutionNative ` must not
+  match `seta r_renderResolution `. Both are asserted, along with a check that no dvar ends up
+  duplicated.
+- **CLR versus JS numbers.** Nucleus supplies `Context.Width` as a .NET `Int32`, not a JS number.
+  Every literal-driven test would still pass if `parseInt` could not read that, while the real
+  handler no-opped. The suite builds a CLR object with `Int32` properties, hands it to Jint as
+  `Context`, and asserts the config is actually written. Jint does surface it as a JS `number`,
+  so it works, but the test now pins that.
+
 ### Why F2 did nothing, and the fix
 
 The watcher log gave it away:

@@ -109,6 +109,48 @@ function hmwSetCfgValue(path, key, value) {
   System.IO.File.WriteAllText(path, lines.join("\r\n"));
 }
 
+// Pin one instance's window to its slice of the screen.
+//
+// Without this every instance launches at its saved r_mode in borderless
+// fullscreen, keeps rendering a full-screen backbuffer wherever Nucleus moves
+// the window, and everything past the split boundary is cut off.
+//
+// Called on every launch rather than only when players2 is seeded, because HMW
+// rewrites config_mp.cfg on exit and the split geometry changes with the player
+// count and layout.
+function hmwApplyViewport(cfgPath, width, height, posX, posY) {
+  var w = parseInt(width, 10);
+  var h = parseInt(height, 10);
+  if (!(w > 0) || !(h > 0)) {
+    hmwLog("WARNING: no viewport from Nucleus (" + width + "x" + height +
+      "), leaving resolution dvars alone");
+    return false;
+  }
+
+  var x = parseInt(posX, 10);
+  var y = parseInt(posY, 10);
+  if (isNaN(x)) { x = 0; }
+  if (isNaN(y)) { y = 0; }
+
+  // HMW stores the resolution as a single "WxH" string, unlike the separate
+  // width and height dvars of the MWR handler this was derived from.
+  hmwSetCfgValue(cfgPath, "seta r_mode", w + "x" + h);
+  hmwSetCfgValue(cfgPath, "seta r_fullscreen", "0");
+  hmwSetCfgValue(cfgPath, "seta r_fullscreenWindow", "0");
+  hmwSetCfgValue(cfgPath, "seta r_aspectRatio", "auto");
+  // r_renderResolution is a megapixel count, "3.6864" for 2560x1440. Leaving it
+  // stale renders the old pixel count into the new window, so pin the render
+  // resolution to the window instead of editing that number.
+  hmwSetCfgValue(cfgPath, "seta r_renderResolutionNative", "1");
+  // Place the window up front so the first frame is already correct instead of
+  // waiting for Nucleus to move it.
+  hmwSetCfgValue(cfgPath, "seta vid_xpos", "" + x);
+  hmwSetCfgValue(cfgPath, "seta vid_ypos", "" + y);
+
+  hmwLog("viewport " + w + "x" + h + " at " + x + "," + y);
+  return true;
+}
+
 // --- identity backup / restore --------------------------------------------
 // The handler rewrites files that belong to the user's normal HMW install, so
 // keep a pristine copy of each before the first modification.
@@ -459,6 +501,10 @@ Game.Play = function () {
 
   // -- 4. distinct in-game name ---------------------------------------------
   hmwSetCfgValue(players2 + "\\config_mp.cfg", "seta name", "Player" + playerNo);
+
+  // -- 4b. viewport size and position ---------------------------------------
+  hmwApplyViewport(players2 + "\\config_mp.cfg",
+    Context.Width, Context.Height, Context.PosX, Context.PosY);
 
   // -- 5. identity isolation -------------------------------------------------
   // HMW identifies a player by %LOCALAPPDATA%\hmw-mod\hwgd.pf. If every instance
