@@ -39,7 +39,7 @@ param(
     # How to deliver the command. Post* uses window messages and needs no focus.
     # Keys* brings each window to the foreground and uses SendKeys.
     # *Toggle sends the console toggle key before and after the command.
-    [ValidateSet('PostToggle', 'PostNoToggle', 'KeysToggle', 'KeysNoToggle')]
+    [ValidateSet('BindKey', 'PostToggle', 'PostNoToggle', 'KeysToggle', 'KeysNoToggle')]
     [string]$Variant,
 
     # Assert the guest selection logic against synthetic data, then exit.
@@ -49,7 +49,15 @@ param(
 $ErrorActionPreference = 'Continue'
 
 # The variant the F2 hotkey uses. KeysToggle is the one confirmed working.
-$DefaultVariant = 'KeysToggle'
+# BindKey: press the one key the handler bound the connect command to. This is
+# the default because KeysToggle, which was reliable with a single guest, failed
+# with two. KeysToggle uses SendKeys, which goes to whatever window is in the
+# foreground, so it has to steal focus per guest and type a whole command; that
+# got much less reliable once Game.SupportsMultipleKeyboardsAndMice was turned
+# off and Nucleus stopped installing its keyboard hook layer. BindKey posts a
+# single message straight to each guest's window handle and never touches focus.
+# KeysToggle is kept as a fallback: pass -Variant KeysToggle.
+$DefaultVariant = 'BindKey'
 
 $HostPort      = 27016
 $PollMs        = 100
@@ -65,6 +73,11 @@ $BackupSuffix  = '.nucleus-original'
 $VK_F2      = 0x71
 $VK_RETURN  = 0x0D
 $VK_OEM_3   = 0xC0   # the `/~ key, which toggles the HMW console
+# The key the handler binds "connect 127.0.0.1:27016" to inside each guest.
+# Must match HMW_CONNECT_BIND_KEY in HorizonMW.js. F3 = 0x72, F1/F2 are taken by
+# the game's own discord_accept / discord_deny binds.
+$ConnectBindKey  = 'F3'
+$VK_CONNECT_BIND = 0x72
 $WM_KEYDOWN = 0x0100
 $WM_KEYUP   = 0x0101
 $WM_CHAR    = 0x0102
@@ -235,6 +248,16 @@ function Set-WindowForeground([IntPtr]$Handle) {
 
 function Send-ConnectCommand {
     param([IntPtr]$Handle, [string]$Command, [string]$Mode)
+
+    # BindKey does not use $Command at all. The handler has already bound the
+    # whole connect command to $ConnectBindKey inside the guest's keys_mp.cfg,
+    # so one posted keypress is the entire delivery: no console to toggle, no
+    # text to type, no ENTER, and no focus to steal.
+    if ($Mode -eq 'BindKey') {
+        Send-KeyMessage $Handle $VK_CONNECT_BIND
+        Start-Sleep -Milliseconds 750
+        return
+    }
 
     $useMessages  = $Mode -like 'Post*'
     $toggleConsole = $Mode -like '*Toggle'

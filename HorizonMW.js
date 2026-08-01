@@ -15,6 +15,11 @@ var HMW_BACKUP_SUFFIX = ".nucleus-original";
 var HMW_IDENTITY_FILES = ["hwgd.pf", "hmw-key", "hmw-key.pub"];
 var HMW_HOST_PORT = 27016;
 
+// In-game key that each guest binds to "connect 127.0.0.1:HMW_HOST_PORT". The F2
+// watcher presses this rather than typing into the console. Must match
+// $ConnectBindKey in HMWConnectHotkey.ps1.
+var HMW_CONNECT_BIND_KEY = "F3";
+
 // Show HMW's FPS readout in every instance. Set to false to leave whatever each
 // player last chose in-game, since this is reapplied on every launch.
 var HMW_SHOW_FPS = true;
@@ -760,6 +765,22 @@ Game.Play = function () {
       hmwDelete(nucleusAppData + "\\hmw-key.pub");
     }
     hmwLog("guest runs anonymously");
+
+    // Bind the whole connect command to one key inside the game itself, so the
+    // F2 watcher only has to deliver a single keypress instead of opening the
+    // console, typing 26 characters and pressing ENTER. Every one of those extra
+    // steps is a chance for a keystroke to land in the wrong window or be eaten,
+    // and with two or more guests the watcher has to do it repeatedly.
+    //
+    // keys_mp.cfg is seeded above and begins with "unbindall", so this has to be
+    // appended after it, which is what hmwSetCfgValue does. The game rewrites
+    // this file on exit and drops the bind, which is fine because it is written
+    // again on every launch. F3 is used because the game itself already binds
+    // F1 and F2 to discord_accept and discord_deny, and nothing else in the
+    // default 55 binds touches the function keys.
+    hmwSetCfgValue(players2 + "\\keys_mp.cfg", "bind " + HMW_CONNECT_BIND_KEY,
+                   "connect 127.0.0.1:" + HMW_HOST_PORT);
+    hmwLog("bound " + HMW_CONNECT_BIND_KEY + " to connect 127.0.0.1:" + HMW_HOST_PORT);
   }
 
   // -- 6. F2 host-join watcher, host instance only ---------------------------
