@@ -478,23 +478,56 @@ Game.DrawFakeMouseCursor = false;
 
 // --- ProtoInput ------------------------------------------------------------
 
+// Enables Nucleus's legacy multi-keyboard/mouse layer, which the Nucleus readme
+// marks deprecated in favour of ProtoInput. It shows up in the log as
+// "Injecting hook DLL for previous instance" / "Injecting hooks DLL", separately
+// from "Injecting ProtoInput at runtime", so each instance ends up hosting two
+// independent hooking systems.
+//
+// This is the next thing to try if the injection-method change does not fix the
+// third instance fail-fasting: setting it to false removes that whole layer, and
+// it is safe for a controller-only setup, which is what this machine uses.
+// Do not turn it off if multiple keyboards and mice are ever needed.
+//
+// Kept true for now because the known-good MWR handler also sets it, and because
+// the instance that crashed was the only one that had NOT received this hook DLL,
+// which argues against it being the cause.
 Game.SupportsMultipleKeyboardsAndMice = true;
 
-// Injection method. The base MWR handler uses the stealth method, which
-// ProtoInput's own readme describes as the last resort for games that actively
-// block injection. Against hmw-mod.exe it killed the second instance: that
-// process died 30.5 s after launch (PauseBetweenProcessGrab was 30) with an
-// access violation inside ntdll.dll and no ProtoInput module in its loaded
-// module list, i.e. the injection itself faulted, and Nucleus reported
-// "ProtoInput failed to runtime inject". EasyHook runtime injection is the
-// documented default and is what ProtoInput recommends trying first.
+// Injection method. Currently the stealth method, which is what the base MWR
+// handler uses. Enable exactly one of these four lines.
 //
-// If injection still fails, these four lines are the knob: enable exactly one.
-// Order to try: EasyHookMethod, RemoteLoadMethod, InjectStartup, EasyHookStealthMethod.
+// History, because this has been flipped once already and the evidence is easy
+// to misread:
+//
+//   The stealth method was originally in place and the second instance died
+//   30.5 s after launch with an access violation inside ntdll.dll and no
+//   ProtoInput module in its loaded module list, so the injection itself had
+//   faulted. Both the method AND PauseBetweenProcessGrab were changed in
+//   response, 30 down to 15, which fixed injection but left it ambiguous which
+//   of the two changes was responsible. Stealth was never actually cleared.
+//
+//   With EasyHookMethod, injection succeeds reliably: three instances were
+//   injected in one run and ProtoInputHooks64.dll is present in all of them.
+//   But the third instance then fail-fasted 13 s later, inside
+//   h1_mp64_ship.exe at +0x81f4ec with 0xc0000409, STATUS_STACK_BUFFER_OVERRUN.
+//   That is the game's own /GS or __fastfail check firing, and it happened with
+//   the renderer fully up and 135 modules loaded, so the injection landed and
+//   something it did was later rejected by the game's own integrity checking.
+//
+// So this reverts to the method the known-good MWR handler uses, now paired with
+// PauseBetweenProcessGrab = 15 rather than the 30 it originally had, which also
+// disambiguates that earlier double change.
+//
+// How to read the result: if injection fails again, the crashed process's WER
+// module list will have no ProtoInputHooks64.dll and Nucleus logs "ProtoInput
+// failed to runtime inject". If injection succeeds and the third instance still
+// fail-fasts with 0xc0000409, the injection method is not the cause and the next
+// lever is Game.SupportsMultipleKeyboardsAndMice below.
 Game.ProtoInput.InjectStartup = false;
 Game.ProtoInput.InjectRuntime_RemoteLoadMethod = false;
-Game.ProtoInput.InjectRuntime_EasyHookMethod = true;
-Game.ProtoInput.InjectRuntime_EasyHookStealthMethod = false;
+Game.ProtoInput.InjectRuntime_EasyHookMethod = false;
+Game.ProtoInput.InjectRuntime_EasyHookStealthMethod = true;
 
 Game.LockInputAtStart = false;
 Game.LockInputSuspendsExplorer = true;
