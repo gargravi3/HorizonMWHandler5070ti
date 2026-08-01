@@ -230,6 +230,44 @@ longer told to connect to itself, a single pid and a single window handle, and n
 restore during the session. Start to finish in 4 s for one guest, which matches the per-guest
 budget of 500 + 200 + 1000 + 750 ms plus focus time.
 
+## Session 6 (1 Aug 2026, 01:01) - everything working
+
+Two instances, correct split geometry, no crash, and F2 host-join. The complete goal.
+
+The timing fix landed exactly as predicted. `PauseBetweenStarts = 25` shows up as
+`Pausing for 25 seconds`, and the last instance's grace went from the 28 s that crashed to 43 s:
+
+| | launch | repositioned | grace |
+| --- | --- | --- | --- |
+| instance 0 | 01:01:54 | 01:02:54 | 60 s |
+| instance 1 | 01:02:39 | 01:03:22 | **43 s**, predicted 43 s |
+
+```
+[01:02:54] Attempting to reposition, resize and strip borders for instance 0 (pid 19876)
+[01:03:22] Attempting to reposition, resize and strip borders for instance 1 (pid 15952)
+[01:04:24] connecting 1 guest(s) using KeysToggle: instances 1
+[01:04:24]   instance 1 pid 15952 hwnd 68966
+[01:04:28] done
+[01:08:05] no hmw-mod.exe for a while, exiting
+[01:08:05] restored hwgd.pf / hmw-key / hmw-key.pub
+```
+
+No `ERROR - ResetWindows was unsuccessful` anywhere in the session, where session 5 had it for
+instance 1, and no `hmw-mod.exe` entry in the Windows Application log. The watcher also exercised
+its idle-exit path, restoring the identity files because the session ended without `Game.OnStop`.
+
+Verified working end to end:
+
+- N instances launching from a single `hmw-mod.exe` that is both launcher and game
+- per-instance `players2`, so saves, loadouts and settings do not collide
+- per-instance identity via `hwgd.pf`, host keeps the real keypair, guests are anonymous, and the
+  user's real `%LOCALAPPDATA%\hmw-mod` is backed up and restored
+- per-instance ports, 27016 + PlayerID * 2
+- one controller per instance
+- windows positioned and resized to their slice without cutting the image off
+- F2 joining every guest to the host's private match
+- identity restored on normal exit, on Nucleus shutdown, and on the watcher's idle path
+
 ## Session 5 - instance 1 crashed during "reposition, resize and strip borders"
 
 Session 4 looked much better but instance 1 died just as it was moved to its slice. The Nucleus
