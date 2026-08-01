@@ -48,6 +48,89 @@ previous version keeps serving.
 Restart Nucleus, add the game, and point it at `hmw-mod.exe` in the HorizonMW install
 (`...\steamapps\common\Call of Duty Modern Warfare Remastered\hmw-mod.exe`).
 
+## Recreating the working setup
+
+The handler is not the whole configuration. This is the known-good four-player state, as read off the
+machine it runs on, including the parts **no amount of handler code can set**.
+
+### The combination that is stable
+
+**Four instances, `Graphics = Medium`, `FrameCap = 144`, four controllers, 1920x1080 display.** Both
+dropdown values live in the Nucleus profile, not in the handler, so a fresh profile starts at
+`Default` and no cap.
+
+### Windows, and the one setting that is mandatory
+
+| Setting | Value here | Why |
+|---|---|---|
+| Pagefile | **fixed 65536 MB on C:**, "automatically manage" **off** | four instances commit ~55 GB |
+| Commit limit | 95.2 GB (31.2 GB RAM + 64 GB pagefile) | |
+| Physical RAM | 31.2 GB | 30.6 GB used with four instances, 98% |
+
+**This one is not optional.** With Windows' default 16 GB pagefile the commit limit was 47.2 GB, three
+instances needed 52.2 GB, and the third died ~30 s in with `0xe06d7363` from a refused allocation. Peak
+pagefile usage since has been only 609 MB, so the 64 GB is reservation headroom rather than disk
+traffic, and shrinking it to what "looks used" would bring the crash back.
+
+Also on this machine, recorded because they were checked while hunting the startup crash and are **not**
+requirements: HVCI / memory integrity **on**, no per-image exploit-protection mitigations, user shadow
+stacks not enforced.
+
+### Nucleus
+
+| | |
+|---|---|
+| NucleusCoop.exe | 2.3.0.0, at `C:\NucleusCoop` |
+| `Settings.ini` | `Network=Automatic`, `LosslessHook=True`, `SplitDiv=False`, `DebugLog=False` |
+| Profile | `Player(s) = 4`, `Controller(s) = 4`, `K&M = 0` |
+| Layout | 2x2, four `MonitorBounds` of `960x540` at `(0,0)`, `(960,0)`, `(0,540)`, `(960,540)`, all on `ScreenIndex 0` |
+
+`DebugLog=True` is what produces `C:\NucleusCoop\content\app.log`. It is off here, so that log is
+empty; turn it on before reporting an injection problem.
+
+`MergerResolution` in the profile still reads `2560X1440` from the old monitor. It is inert for this
+layout and was left alone rather than edited blind.
+
+### Hardware this was measured on
+
+RTX 5070 Ti, 16,303 MiB, driver 610.88. Single 1920x1080 display (a 240 Hz projector). HorizonMW
+`hmw-mod.exe` 1.6.7.53, with `h1_mp64_ship.exe` loaded from `%LOCALAPPDATA%\hmw-mod\bin`.
+
+### Game settings the handler does NOT manage
+
+The handler writes only the dvars listed under [Graphics presets](#graphics-presets), the window and
+frame-cap dvars, `name`, and the F3 bind. **Everything else comes from the base install**, because
+`players2\` is seeded from
+`...\Call of Duty Modern Warfare Remastered\players2\` and files are copied **only if absent**.
+
+So field of view, mouse sensitivity, controller layout and deadzones, audio levels, HUD options and
+every keybind other than F3 are whatever the base install had **at the moment each instance was first
+seeded**.
+
+Two consequences worth knowing before you spend an evening confused:
+
+- **Configure the base install first.** Launch HorizonMW normally, set FOV, sensitivity, audio and
+  binds, quit, and only then create instances. Anything set afterwards will not reach instances that
+  already exist.
+- **To push a change to existing instances**, either edit each
+  `C:\NucleusCoop\content\HorizonMW\Instance<N>\players2\config_mp.cfg`, or delete the instance folders
+  and let them re-seed. Deleting loses that instance's unlocks and stats, which live in `players2\`.
+
+Two more things are outside the handler by design: **the identity files** in
+`%LOCALAPPDATA%\hmw-mod` (`hwgd.pf`, `hmw-key`, `hmw-key.pub`), backed up to `.nucleus-original` on
+first launch and restored on stop, and **the graphics presets themselves**, which are editable text
+files under `handlers\HorizonMW\Graphics\`.
+
+### Settings deliberately not used
+
+| | Why |
+|---|---|
+| `r_mode` | never written; the game only accepts enumerated modes and a rejected value once put a window half off-screen |
+| `r_renderResolution` per slice | measured as worth nothing: 3,737 MiB per instance before, 3,791 after. See Session 4 |
+| `+set logfile 2` | HMW ignores it; produced no `console_mp.log` anywhere |
+| ProtoInput stealth method | killed the *first* instance; `EasyHookMethod` is the working one |
+| `UseOpenXinput` | the shipped `openxinput1_3.dll` is x86 and `hmw-mod.exe` is x64 |
+
 ## How to play
 
 1. Launch all instances and wait until they have finished resizing and repositioning.
