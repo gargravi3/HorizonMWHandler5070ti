@@ -18,13 +18,32 @@ Derived from birden's `Call of Duty Modern Warfare Remastered.js` handler
 
 ## Install
 
-Copy into the Nucleus install so the script folder name matches the handler file name:
+Run `install.ps1`, which copies every file to the right place and verifies each one by
+hash:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1        # -NucleusRoot to override
+```
+
+The layout it produces, which matters more than it looks:
 
 ```
-C:\NucleusCoop\handlers\HorizonMW.js
+C:\NucleusCoop\handlers\HorizonMW.js            <- the handler. Nucleus loads ONLY this
+C:\NucleusCoop\handlers\HorizonMW\              <- Context.ScriptFolder at runtime
+C:\NucleusCoop\handlers\HorizonMW\Graphics\     <- preset files
 C:\NucleusCoop\handlers\HorizonMW\HMWConnectHotkey.bat
 C:\NucleusCoop\handlers\HorizonMW\HMWConnectHotkey.ps1
 ```
+
+**Nucleus does not scan subfolders for handlers.** Putting `HorizonMW.js` in the asset
+folder next to the presets looks right, verifies clean against its own target and does
+nothing at all: the frame cap dropdown was installed that way once and never appeared,
+because the older copy at the handlers root kept being loaded. The two files were one
+commit apart, so nothing about the running handler looked stale. That is the reason
+`install.ps1` verifies destinations by hash instead of trusting the copy.
+
+Handlers are parsed when Nucleus starts, so **restart Nucleus** after installing or the
+previous version keeps serving.
 
 Restart Nucleus, add the game, and point it at `hmw-mod.exe` in the HorizonMW install
 (`...\steamapps\common\Call of Duty Modern Warfare Remastered\hmw-mod.exe`).
