@@ -1,0 +1,1 @@
+﻿revert note: pagefile was C:\pagefile.sys fixed at initial 16384 MB / max 16384 MB, AutomaticManagedPagefile=False

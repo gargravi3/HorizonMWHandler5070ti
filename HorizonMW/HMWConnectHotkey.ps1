@@ -160,6 +160,34 @@ function Get-HmwGuestWindow {
 
 # --- self test -------------------------------------------------------------
 
+# A key message's lParam is pointer-sized, but every flag lives in its low 32
+# bits, and a key *release* sets the top two of those (0xC0000000). For F3 the
+# result is a UInt32 of 3225223169, and casting that straight to IntPtr is what
+# broke every BindKey join:
+#
+#   64-bit PowerShell : [IntPtr]3225223169 succeeds
+#   32-bit PowerShell : throws "Arithmetic operation resulted in an overflow"
+#
+# IntPtr is 4 bytes there and the conversion runs through a checked Int32.
+# NucleusCoop.exe is x86, so the powershell.exe it starts is redirected to
+# SysWOW64 and is always the 32-bit one. The bug could therefore only ever appear
+# in production, never in a test run from an ordinary 64-bit shell.
+#
+# It also failed in the worst direction: both lParams are computed before the
+# first PostMessage call, so nothing was ever posted, and the throw escaped to the
+# watcher's top-level handler and abandoned the remaining guests. The log line
+# "join failed: Cannot convert value 3225223169 to type System.IntPtr" is this
+# bug, not the game refusing posted input.
+#
+# $PointerSize is injectable so the self test can exercise both widths from either
+# host. Defined above the -SelfTest block so the self test can reach it, since it
+# needs no P/Invoke; Send-KeyMessage, which does, stays in the win32 section.
+function New-KeyLParam([uint32]$Bits, [int]$PointerSize = [IntPtr]::Size) {
+    if ($PointerSize -eq 8) { return [IntPtr][int64]$Bits }
+    # Reinterpret the identical bit pattern as a signed int so that it fits.
+    return [IntPtr][BitConverter]::ToInt32([BitConverter]::GetBytes($Bits), 0)
+}
+
 if ($SelfTest) {
     $fail = 0
     function Assert([string]$name, [scriptblock]$test) {
@@ -194,6 +222,61 @@ if ($SelfTest) {
     Assert 'no input yields an empty array'     { @(Select-HmwGuest -ProcessInfo @()).Count -eq 0 }
     Assert 'host only yields an empty array'    { @(Select-HmwGuest -ProcessInfo @($sample[1])).Count -eq 0 }
 
+    ''
+    "key lParam construction (this host: IntPtr is $([IntPtr]::Size) bytes)"
+    # 0xC03D0001 is the genuine F3 key-release lParam: repeat count 1, scancode
+    # 0x3D, plus the transition and previous-state bits. It is the exact value
+    # that made every join fail.
+    #
+    # It has to be built with Convert rather than written as [uint32]0xC03D0001,
+    # because PowerShell parses an 8-digit hex literal as a *signed* Int32, so
+    # that cast throws before the test can even run. Masks have the same trap:
+    # 0xFFFFFFFF parses as -1, which is why the mask below is built from
+    # [uint32]::MaxValue instead.
+    $keyUpBits   = [Convert]::ToUInt32('C03D0001', 16)
+    $keyDownBits = [Convert]::ToUInt32('003D0001', 16)
+    $low32       = [int64][uint32]::MaxValue
+
+    Assert 'release lParam builds on this host'     { (New-KeyLParam $keyUpBits) -is [IntPtr] }
+    # The 32-bit branch is the one production always takes, and it is also valid
+    # on a 64-bit host, so it is checked unconditionally.
+    Assert 'release lParam correct, 32-bit branch'  {
+        ([int64](New-KeyLParam $keyUpBits 4) -band $low32) -eq $keyUpBits
+    }
+    Assert 'press lParam correct, 32-bit branch'    {
+        ([int64](New-KeyLParam $keyDownBits 4) -band $low32) -eq $keyDownBits
+    }
+    # The reverse is not true: [IntPtr][int64]3225223169 overflows in a 32-bit
+    # process, so the 64-bit branch simply cannot be exercised from there. Claiming
+    # to test it anyway is how the original bug slipped through, so skip it openly.
+    if ([IntPtr]::Size -eq 8) {
+        Assert 'release lParam correct, 64-bit branch' {
+            ([int64](New-KeyLParam $keyUpBits 8) -band $low32) -eq $keyUpBits
+        }
+        Assert 'press lParam correct, 64-bit branch'   {
+            ([int64](New-KeyLParam $keyDownBits 8) -band $low32) -eq $keyDownBits
+        }
+    } else {
+        '  SKIP  64-bit branch is not reachable from a 32-bit host'
+    }
+    # Non-vacuous, and the reason this bug survived: the cast being replaced only
+    # throws where IntPtr is 4 bytes. Assert the behaviour this host can actually
+    # observe, so the check is a real one on both rather than vacuous on one.
+    Assert 'the old cast is unusable at this width' {
+        $threw = $false
+        try { $null = [IntPtr]$keyUpBits } catch { $threw = $true }
+        if ([IntPtr]::Size -eq 4) { $threw } else { -not $threw }
+    }
+    # The watcher and the handler must agree on which key carries the connect
+    # command, or the keypress lands on an unbound key and nothing happens.
+    Assert 'F3 constant matches its virtual key'    { $ConnectBindKey -eq 'F3' -and $VK_CONNECT_BIND -eq 0x72 }
+    # MapVirtualKey supplies the scancode at runtime; if F3 ever stopped mapping
+    # to 0x3D the lParam above would no longer describe the key being sent.
+    Assert 'F3 maps to scancode 0x3D'               {
+        Add-Type -Namespace HMWT -Name Map -MemberDefinition '[DllImport("user32.dll")] public static extern uint MapVirtualKey(uint uCode, uint uMapType);' -ErrorAction SilentlyContinue
+        [HMWT.Map]::MapVirtualKey($VK_CONNECT_BIND, 0) -eq 0x3D
+    }
+
     if ($fail -gt 0) { "$fail check(s) failed"; exit 1 }
     'all checks passed'
     exit 0
@@ -214,8 +297,8 @@ Add-Type -Namespace HMW -Name Win -MemberDefinition @'
 
 function Send-KeyMessage([IntPtr]$Handle, [int]$VirtualKey) {
     $scan = [HMW.Win]::MapVirtualKey([uint32]$VirtualKey, 0)
-    $down = [IntPtr](1 -bor ($scan -shl 16))
-    $up   = [IntPtr](1 -bor ($scan -shl 16) -bor 0xC0000000)
+    $down = New-KeyLParam ([uint32](1 -bor ($scan -shl 16)))
+    $up   = New-KeyLParam ([uint32](1 -bor ($scan -shl 16) -bor 0xC0000000))
     [void][HMW.Win]::PostMessage($Handle, $WM_KEYDOWN, [IntPtr]$VirtualKey, $down)
     Start-Sleep -Milliseconds 40
     [void][HMW.Win]::PostMessage($Handle, $WM_KEYUP, [IntPtr]$VirtualKey, $up)
@@ -296,11 +379,20 @@ function Invoke-HostJoin([string]$Mode) {
     }
     Write-Log ("connecting $($guests.Count) guest(s) using $Mode" + ": instances " +
         (($guests | ForEach-Object { $_.Index }) -join ', '))
+    $delivered = 0
     foreach ($g in $guests) {
         Write-Log "  instance $($g.Index) pid $($g.ProcessId) hwnd $($g.Handle)"
-        Send-ConnectCommand -Handle $g.Handle -Command $command -Mode $Mode
+        # One guest must not be able to abandon the others. The lParam overflow
+        # threw on the first guest and took the whole loop with it, so instance 2
+        # was never even attempted.
+        try {
+            Send-ConnectCommand -Handle $g.Handle -Command $command -Mode $Mode
+            $delivered++
+        } catch {
+            Write-Log "  instance $($g.Index) delivery failed: $($_.Exception.Message)"
+        }
     }
-    Write-Log 'done'
+    Write-Log "done, delivered to $delivered of $($guests.Count) guest(s)"
 }
 
 # Repeated Nucleus sessions must not stack watchers.
@@ -363,7 +455,11 @@ if ($TestConnect) {
 $mode = if ($Variant) { $Variant } else { $DefaultVariant }
 
 Stop-PreviousWatchers
-Write-Log "watcher started, pid $PID, variant $mode"
+# The pointer width is worth recording: Nucleus is x86, so this is normally the
+# 32-bit PowerShell, and that difference is what made the lParam overflow show up
+# only in real sessions.
+Write-Log ("watcher started, pid $PID, variant $mode, " +
+    "$([IntPtr]::Size * 8)-bit host, PowerShell $($PSVersionTable.PSVersion)")
 
 $wasDown  = $false
 $seenGame = $false

@@ -9,13 +9,26 @@ $failed = 0
 # Do not name the parameter $Args: it collides with the automatic variable and
 # the splat silently expands to nothing, which ran the watcher instead of its
 # self test and reported a pass on no output.
-function Invoke-Suite([string]$Name, [string]$Path, [string[]]$ScriptArgs) {
+function Invoke-Suite([string]$Name, [string]$Path, [string[]]$ScriptArgs, [string]$Host64Or32 = '64') {
     ""
     "=== $Name ==="
-    if ($ScriptArgs) {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Path @ScriptArgs
+    # NucleusCoop.exe is x86, so the watcher it launches is redirected to
+    # SysWOW64 and runs with a 4-byte IntPtr. Numeric conversions that succeed
+    # in a 64-bit shell can overflow there, so the watcher's suite has to run at
+    # both widths. Testing only at 64 bits hid the lParam bug completely.
+    $exe = if ($Host64Or32 -eq '32') {
+        Join-Path $env:SystemRoot 'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
     } else {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Path
+        Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    }
+    if (-not (Test-Path -LiteralPath $exe)) {
+        "  -> SKIPPED, no $Host64Or32-bit PowerShell at $exe"
+        return
+    }
+    if ($ScriptArgs) {
+        & $exe -NoProfile -ExecutionPolicy Bypass -File $Path @ScriptArgs
+    } else {
+        & $exe -NoProfile -ExecutionPolicy Bypass -File $Path
     }
     if ($LASTEXITCODE -ne 0) {
         "  -> SUITE FAILED"
@@ -24,7 +37,9 @@ function Invoke-Suite([string]$Name, [string]$Path, [string[]]$ScriptArgs) {
 }
 
 Invoke-Suite 'handler helpers under Jint' (Join-Path $PSScriptRoot 'dryrun-helpers.ps1') @()
-Invoke-Suite 'F2 watcher guest selection'  (Join-Path $repo 'HorizonMW\HMWConnectHotkey.ps1') @('-SelfTest')
+$watcher = Join-Path $repo 'HorizonMW\HMWConnectHotkey.ps1'
+Invoke-Suite 'F2 watcher self test, 64-bit host' $watcher @('-SelfTest') '64'
+Invoke-Suite 'F2 watcher self test, 32-bit host (as Nucleus runs it)' $watcher @('-SelfTest') '32'
 
 ""
 "=== syntax ==="
