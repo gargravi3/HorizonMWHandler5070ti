@@ -15,6 +15,10 @@ var HMW_BACKUP_SUFFIX = ".nucleus-original";
 var HMW_IDENTITY_FILES = ["hwgd.pf", "hmw-key", "hmw-key.pub"];
 var HMW_HOST_PORT = 27016;
 
+// Show HMW's FPS readout in every instance. Set to false to leave whatever each
+// player last chose in-game, since this is reapplied on every launch.
+var HMW_SHOW_FPS = true;
+
 // --- small helpers ---------------------------------------------------------
 
 // Timestamp is built in plain JS: Jint cannot call System.DateTime.Now.ToString(),
@@ -114,6 +118,24 @@ function hmwSetCfgValue(path, key, value) {
 // a full-screen backbuffer wherever Nucleus moves the window, and everything
 // past the split boundary is cut off.
 //
+// HMW's FPS readout is cg_infobar_fps, NOT the stock cg_drawFPS.
+//
+// Established by toggling the counter in-game in one instance and diffing its
+// config_mp.cfg against another instance's: cg_infobar_fps went to "1" while
+// cg_drawFPS stayed "0" in both. Setting cg_drawFPS would have done nothing
+// visible, and setting both risks two overlapping readouts.
+//
+// cg_drawFPSLabels is already "1" out of the box and is left alone. Note that
+// "seta cg_drawFPS " is a prefix of "seta cg_drawFPSLabels ", so anything added
+// here for the stock dvar has to keep hmwSetCfgValue's trailing space.
+function hmwApplyFpsCounter(cfgPath) {
+  if (!HMW_SHOW_FPS) {
+    return false;
+  }
+  hmwSetCfgValue(cfgPath, "seta cg_infobar_fps", "1");
+  return true;
+}
+
 // Sizing and positioning are left entirely to Nucleus, which is what
 // Game.SupportsPositioning and Game.ResetWindows are for. In particular this
 // does not write r_mode, and it resets vid_xpos and vid_ypos rather than aiming
@@ -507,6 +529,7 @@ Game.Play = function () {
 
   // -- 4b. windowed mode, so Nucleus can size the window to the slice --------
   hmwApplyWindowedMode(players2 + "\\config_mp.cfg");
+  hmwApplyFpsCounter(players2 + "\\config_mp.cfg");
   hmwLog("windowed; Nucleus slice " + Context.Width + "x" + Context.Height +
     " at " + Context.PosX + "," + Context.PosY);
 

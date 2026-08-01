@@ -268,6 +268,25 @@ Verified working end to end:
 - F2 joining every guest to the host's private match
 - identity restored on normal exit, on Nucleus shutdown, and on the watcher's idle path
 
+## FPS counter
+
+On in every instance by default. Set `HMW_SHOW_FPS = false` at the top of `HorizonMW.js` to leave
+whatever each player last chose in-game instead.
+
+The dvar is **`cg_infobar_fps`**, not the stock `cg_drawFPS`. That was settled empirically rather
+than guessed: the counter was toggled on in-game in one instance, then that instance's
+`config_mp.cfg` was diffed against another's. `cg_infobar_fps` was the only render dvar that moved,
+and `cg_drawFPS` stayed `"0"` in both, so writing the stock dvar would have done nothing visible
+and writing both risks two overlapping readouts.
+
+`cg_drawFPSLabels` is already `"1"` out of the box and is left alone. Worth knowing:
+`seta cg_drawFPS ` is a prefix of `seta cg_drawFPSLabels `, so `hmwSetCfgValue`'s trailing space is
+what keeps them apart. There are tests for both that collision and for the opt-out path.
+
+Reapplied on every launch, like the windowed-mode pass, because HMW rewrites `config_mp.cfg` on
+exit. A player who turns the counter off in-game therefore gets it back next launch unless
+`HMW_SHOW_FPS` is false.
+
 ## Session 5 - instance 1 crashed during "reposition, resize and strip borders"
 
 Session 4 looked much better but instance 1 died just as it was moved to its slice. The Nucleus
