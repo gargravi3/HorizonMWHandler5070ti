@@ -268,6 +268,83 @@ Verified working end to end:
 - F2 joining every guest to the host's private match
 - identity restored on normal exit, on Nucleus shutdown, and on the watcher's idle path
 
+## Graphics presets
+
+Nucleus game options menu, **"Graphics preset for every instance"**: `Default`, `Low`, `Medium`,
+`High`, `Extra`. Drop it for 4 instances, raise it for 2. It applies to every instance.
+
+`Default` is the default selection and changes nothing, so an existing setup behaves exactly as
+before until a preset is picked.
+
+Each other entry is a plain text file of `seta` lines in `handlers\HorizonMW\Graphics\`. **They are
+meant to be edited.** Only the dvars a file actually lists are touched; everything else is left as
+it was.
+
+### Why files rather than the stock handler's approach
+
+The stock MWR handler implements the same option by copying a whole prebuilt config over
+`players2\config_mp.cfg`:
+
+```js
+var savePkgOrigin = System.IO.Path.Combine(Game.Folder, "Config\\config_mp_low_opt.cfg");
+System.IO.File.Copy(savePkgOrigin, savePath, true);
+```
+
+That is not usable here for two reasons. It would discard everything this handler writes
+per-instance, the player name, the windowed-mode dvars and the FPS setting, and those shipped
+configs use MWR's *hashed* dvar names (`seta 0x617FB3B4 "1"`), which HMW's config does not use.
+
+### Why the shipped presets are conservative
+
+HMW has no master quality dvar, just ~15 individual ones, and several are string enums whose other
+accepted values are undocumented:
+
+```
+seta sm_tileResolution "High"
+seta r_postAA "None"
+seta r_depthPrepass "All"
+seta sm_cacheSpotShadows "Disabled"
+```
+
+A rejected value is *silently ignored* by this engine rather than reported. That is exactly how
+`r_mode "2560x720"` got quietly rewritten to `2560x1440`, which is what put a window half
+off-screen and crashed an instance. So the shipped presets only set dvars whose type and direction
+are unambiguous: the `r_picmip` family, `r_texFilterAniso*`, `sm_enable`,
+`sm_maxLightsWithShadows`, `r_drawWater`, `fx_marks`, `ai_corpseLimit`, `ragdoll_mp_limit`,
+`r_vsync`. `Extra` also sets `sm_tileResolution "High"`, and only because `"High"` is the value the
+untouched install already had, so it is known to be accepted.
+
+Treat the shipped values as a starting point, not as HMW's own presets. They are not, and there is
+no way to read HMW's real preset tables from outside the game.
+
+### Capturing a preset that is guaranteed valid
+
+`Capture-GraphicsPreset.ps1` builds a preset from the game's own values, so nothing is guessed:
+
+```powershell
+# 1. launch through Nucleus with Graphics = Default
+# 2. set the graphics you want in one instance and apply
+# 3. quit that instance, so HMW flushes config_mp.cfg
+cd C:\NucleusCoop\handlers\HorizonMW
+.\Capture-GraphicsPreset.ps1 -Name Low -Instance 0 -Force
+```
+
+It warns if `hmw-mod.exe` is still running, because HMW only writes `config_mp.cfg` on exit, so a
+capture taken while the game is open misses whatever was just changed in the menu.
+
+### Dvars a preset may never set
+
+`r_fullscreen`, `r_fullscreenWindow`, `r_mode`, `vid_xpos`, `vid_ypos`, `name`.
+
+These are ignored with a log line even if a preset file lists them, because the handler owns them.
+A preset putting `r_fullscreen` back to `"1"` or pinning `vid_ypos` at a slice offset would undo the
+two fixes that each took a crash to find, and setting `name` would collapse every instance onto one
+player profile. There is a test that empties the blocklist and confirms the same preset file then
+does break all three, so the guard is doing real work.
+
+Preset application runs *after* the windowed-mode and FPS passes, so a preset can override things
+like `r_renderResolutionNative`, but not the blocked list.
+
 ## FPS counter
 
 On in every instance by default. Set `HMW_SHOW_FPS = false` at the top of `HorizonMW.js` to leave

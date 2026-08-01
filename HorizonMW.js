@@ -169,6 +169,93 @@ function hmwApplyWindowedMode(cfgPath) {
   return true;
 }
 
+// --- graphics presets ------------------------------------------------------
+
+// Dvars a preset file is never allowed to set, however it has been edited.
+// These are the ones the handler owns: let a preset put r_fullscreen back to "1"
+// or pin vid_ypos at a slice offset and split-screen breaks or an instance
+// crashes on reposition, and letting it set "name" would collapse every
+// instance onto one player profile.
+var HMW_PRESET_BLOCKED = [
+  "r_fullscreen",
+  "r_fullscreenWindow",
+  "r_mode",
+  "vid_xpos",
+  "vid_ypos",
+  "name"
+];
+
+function hmwPresetBlocked(dvar) {
+  for (var i = 0; i < HMW_PRESET_BLOCKED.length; i++) {
+    if (HMW_PRESET_BLOCKED[i].toLowerCase() === dvar.toLowerCase()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Applies one preset file's seta lines to an instance's config, leaving every
+// dvar the file does not mention untouched. That is the whole reason this reads
+// a list of dvars instead of copying a prebuilt config over the top the way the
+// stock MWR handler does: a wholesale copy would discard this instance's name,
+// windowed mode and FPS setting, and the stock handler's configs use MWR's
+// hashed dvar names, which HMW does not use.
+//
+// Returns the number of dvars applied, 0 for "Default", a missing file or an
+// unrecognised preset name.
+function hmwApplyGraphicsPreset(cfgPath, preset, presetDir) {
+  if (!preset || preset === "Default") {
+    return 0;
+  }
+
+  var path = presetDir + "\\" + preset + ".cfg";
+  if (!System.IO.File.Exists(path)) {
+    hmwLog("graphics preset '" + preset + "' has no file at " + path + ", leaving settings alone");
+    return 0;
+  }
+
+  var lines = System.IO.File.ReadAllLines(path);
+  var applied = 0;
+  var malformed = 0;
+  var skipped = [];
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = ("" + lines[i]).replace(/^\s+|\s+$/g, "");
+    if (line === "" || line.indexOf("//") === 0 || line.indexOf("#") === 0) {
+      continue;
+    }
+    // seta <dvar> "<value>", or bare <dvar> <value>.
+    //
+    // Both forms are anchored and the dvar name is restricted, because a looser
+    // pattern such as (\S+)\s+"?([^"]*)"? also swallows ordinary prose: a stray
+    // line of English in a preset file parsed as a dvar named after its first
+    // word and got written into config_mp.cfg. An unquoted value has to be a
+    // single token for the same reason. Quoted values keep everything inside the
+    // quotes, so string settings with spaces survive.
+    var m = /^(?:seta\s+)?([A-Za-z0-9_]+)\s+"([^"]*)"\s*$/.exec(line);
+    if (!m) {
+      m = /^(?:seta\s+)?([A-Za-z0-9_]+)\s+(\S+)\s*$/.exec(line);
+    }
+    if (!m) {
+      malformed++;
+      continue;
+    }
+    var dvar = m[1];
+    var value = m[2];
+    if (hmwPresetBlocked(dvar)) {
+      skipped.push(dvar);
+      continue;
+    }
+    hmwSetCfgValue(cfgPath, "seta " + dvar, value);
+    applied++;
+  }
+
+  hmwLog("graphics preset " + preset + ": applied " + applied + " dvar(s)" +
+         (skipped.length ? ", ignored " + skipped.join(", ") + " (handler owns these)" : "") +
+         (malformed ? ", skipped " + malformed + " unparseable line(s)" : ""));
+  return applied;
+}
+
 // --- identity backup / restore --------------------------------------------
 // The handler rewrites files that belong to the user's normal HMW install, so
 // keep a pristine copy of each before the first modification.
@@ -226,6 +313,38 @@ Game.SteamID = "393080";
 Game.MaxPlayers = 8;
 Game.MaxPlayersOneMonitor = 8;
 Game.HandlerInterval = 100;
+
+// --- Nucleus UI options ----------------------------------------------------
+
+// Graphics preset, so settings can be dropped when running 4 instances and
+// raised again for 2. Picked in Nucleus under the game's options menu, and read
+// back in Play() as Context.Options["Graphics"].
+//
+// "Default" is first, which makes it the default selection, and it changes
+// nothing at all: whatever each instance already has is left alone.
+//
+// Each other entry is a plain text file of seta lines under
+// handlers\HorizonMW\Graphics. They are meant to be edited. HMW has no single
+// master quality dvar, and several of its graphics dvars are string enums
+// (sm_tileResolution "High", r_postAA "None", r_depthPrepass "All") whose other
+// accepted values are not documented anywhere, so the shipped presets only touch
+// dvars whose type and direction are unambiguous. Guessing at a value the game
+// does not accept is what made r_mode silently revert to native and, through
+// that, put a window half off-screen.
+//
+// To build a preset that is guaranteed valid, set the graphics you want in-game
+// and run Capture-GraphicsPreset.ps1, which copies the real values out of that
+// instance's config.
+//
+// This has to stay below the "Game definition" marker: the test harness executes
+// everything above that marker under a bare Jint engine with no Game object.
+var HMW_GRAPHICS_PRESETS = ["Default", "Low", "Medium", "High", "Extra"];
+Game.AddOption(
+  "Graphics preset for every instance",
+  "Lower this when running more instances. Default leaves each instance's own settings alone. Presets are editable text files in handlers\\HorizonMW\\Graphics.",
+  "Graphics",
+  HMW_GRAPHICS_PRESETS
+);
 
 // hmw-mod.exe is both launcher and game process. Game.LauncherExe is left unset
 // on purpose: if LauncherExe and ExecutableName name the same binary, Nucleus
@@ -530,6 +649,17 @@ Game.Play = function () {
   // -- 4b. windowed mode, so Nucleus can size the window to the slice --------
   hmwApplyWindowedMode(players2 + "\\config_mp.cfg");
   hmwApplyFpsCounter(players2 + "\\config_mp.cfg");
+
+  // -- 4c. graphics preset chosen in the Nucleus options menu ----------------
+  // Applied last so a preset can override the render settings written above,
+  // for example turning r_renderResolutionNative off and scaling the render
+  // resolution down. It cannot touch the window or identity dvars: see
+  // HMW_PRESET_BLOCKED.
+  hmwApplyGraphicsPreset(
+    players2 + "\\config_mp.cfg",
+    Context.Options["Graphics"],
+    Context.ScriptFolder + "\\Graphics"
+  );
   hmwLog("windowed; Nucleus slice " + Context.Width + "x" + Context.Height +
     " at " + Context.PosX + "," + Context.PosY);
 

@@ -208,6 +208,137 @@ Check 'HMW_SHOW_FPS false writes nothing'        {
 }
 [void]$engine.Execute('HMW_SHOW_FPS = true;')
 
+# --- graphics presets --------------------------------------------------------
+$presetDir = Join-Path $sandbox 'Graphics'
+New-Item -ItemType Directory -Path $presetDir -Force | Out-Null
+@(
+    '// a comment',
+    '# another comment',
+    '',
+    '   ',
+    'seta r_picmip "3"',
+    'seta sm_enable "0"',
+    'r_texFilterAnisoMax "1"',              # bare form, no seta
+    'seta sm_tileResolution "High"',        # string value
+    'seta r_fullscreen "1"',               # blocked, would break split-screen
+    'seta vid_ypos "720"',                 # blocked, this exact value crashed an instance
+    'seta name "hacker"',                  # blocked, would collapse profiles
+    'total garbage line with no value'     # tolerated, must not throw
+) | Set-Content -LiteralPath (Join-Path $presetDir 'Low.cfg') -Encoding Ascii
+
+$instCfg = Join-Path $p2 'config_mp.cfg'
+
+function ApplyPreset([string]$preset, [string]$cfg) {
+    $js = "var applied = hmwApplyGraphicsPreset(" + (ConvertTo-Json $cfg) + ", " +
+          (ConvertTo-Json $preset) + ", " + (ConvertTo-Json $presetDir) + ");"
+    [void]$engine.Execute($js)
+    return [int]$engine.GetValue('applied').ToObject()
+}
+function PresetCfg([string]$cfg, [string]$key) {
+    @(Get-Content -LiteralPath $cfg | Where-Object { $_ -like "$key *" })
+}
+
+# "Default" must be a complete no-op, since it is the default selection.
+$defCfg = Join-Path $sandbox 'preset-default.cfg'
+Copy-Item -LiteralPath $instCfg -Destination $defCfg -Force
+$defBefore = Get-Content -LiteralPath $defCfg -Raw
+$defCount = ApplyPreset 'Default' $defCfg
+Check 'Default preset applies nothing'           { $defCount -eq 0 }
+Check 'Default preset changes no bytes'          { (Get-Content -LiteralPath $defCfg -Raw) -eq $defBefore }
+
+# An unknown or missing preset must also change nothing rather than throw.
+$missCfg = Join-Path $sandbox 'preset-missing.cfg'
+Copy-Item -LiteralPath $instCfg -Destination $missCfg -Force
+$missBefore = Get-Content -LiteralPath $missCfg -Raw
+$missCount = ApplyPreset 'Nonexistent' $missCfg
+Check 'missing preset file applies nothing'      { $missCount -eq 0 }
+Check 'missing preset file changes no bytes'     { (Get-Content -LiteralPath $missCfg -Raw) -eq $missBefore }
+Check 'missing preset file is logged'            {
+    (Get-Content -LiteralPath $logPath -Raw) -match "graphics preset 'Nonexistent' has no file"
+}
+
+# The real thing, over a config that already went through the windowed pass.
+$lowCfg = Join-Path $sandbox 'preset-low.cfg'
+Copy-Item -LiteralPath $instCfg -Destination $lowCfg -Force
+$lowCount = ApplyPreset 'Low' $lowCfg
+Check 'Low preset applied 4 allowed dvars'       { $lowCount -eq 4 }
+Check 'preset set r_picmip'                      { (PresetCfg $lowCfg 'seta r_picmip') -contains 'seta r_picmip "3"' }
+Check 'preset set sm_enable'                     { (PresetCfg $lowCfg 'seta sm_enable') -eq 'seta sm_enable "0"' }
+Check 'preset honoured the bare no-seta form'    { (PresetCfg $lowCfg 'seta r_texFilterAnisoMax') -eq 'seta r_texFilterAnisoMax "1"' }
+Check 'preset kept a string value intact'        { (PresetCfg $lowCfg 'seta sm_tileResolution') -eq 'seta sm_tileResolution "High"' }
+# A looser regex once parsed the prose line as a dvar named "total" and wrote it
+# straight into config_mp.cfg.
+Check 'prose line did not become a dvar'         { (PresetCfg $lowCfg 'seta total').Count -eq 0 }
+Check 'unparseable line counted in the log'      {
+    (Get-Content -LiteralPath $logPath -Raw) -match 'skipped 1 unparseable line'
+}
+
+# The blocklist is the guard that stops an edited preset undoing the two fixes
+# that took a crash each to find.
+Check 'blocked r_fullscreen stayed off'          { (PresetCfg $lowCfg 'seta r_fullscreen') -eq 'seta r_fullscreen "0"' }
+Check 'blocked vid_ypos stayed at -1'            { (PresetCfg $lowCfg 'seta vid_ypos') -eq 'seta vid_ypos "-1"' }
+Check 'blocked name untouched'                   { (PresetCfg $lowCfg 'seta name') -eq 'seta name "Player2"' }
+# Non-vacuity: with the blocklist emptied the same preset file must actually
+# break windowing, otherwise the three checks above prove nothing.
+Check 'blocklist is what stops r_fullscreen'     {
+    $unguarded = Join-Path $sandbox 'preset-unguarded.cfg'
+    Copy-Item -LiteralPath $instCfg -Destination $unguarded -Force
+    [void]$engine.Execute('var savedBlocked = HMW_PRESET_BLOCKED; HMW_PRESET_BLOCKED = [];')
+    [void](ApplyPreset 'Low' $unguarded)
+    [void]$engine.Execute('HMW_PRESET_BLOCKED = savedBlocked;')
+    ((PresetCfg $unguarded 'seta r_fullscreen') -eq 'seta r_fullscreen "1"') -and
+    ((PresetCfg $unguarded 'seta vid_ypos') -eq 'seta vid_ypos "720"') -and
+    ((PresetCfg $unguarded 'seta name') -eq 'seta name "hacker"')
+}
+Check 'blocklist restored after that check'      {
+    [void]$engine.Execute('var blockedCount = HMW_PRESET_BLOCKED.length;')
+    [int]$engine.GetValue('blockedCount').ToObject() -eq 6
+}
+Check 'blocked dvars are logged'                 {
+    (Get-Content -LiteralPath $logPath -Raw) -match 'ignored r_fullscreen, vid_ypos, name'
+}
+# r_picmip is a prefix of r_picmip_bump, and the preset only names the short one.
+Check 'preset did not create r_picmip_bump'      { (PresetCfg $lowCfg 'seta r_picmip_bump').Count -eq 0 }
+Check 'preset duplicated no dvar'                {
+    $keys = Get-Content -LiteralPath $lowCfg | Where-Object { $_ -match '^seta (\S+)' } |
+            ForEach-Object { ($_ -split ' ')[1] }
+    ($keys | Group-Object | Where-Object Count -gt 1).Count -eq 0
+}
+Check 'preset is idempotent'                     {
+    $once = Get-Content -LiteralPath $lowCfg -Raw
+    [void](ApplyPreset 'Low' $lowCfg)
+    (Get-Content -LiteralPath $lowCfg -Raw) -eq $once
+}
+
+# Every shipped preset must parse, apply cleanly, and never trip the blocklist.
+$shippedDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'HorizonMW\Graphics'
+foreach ($name in @('Low', 'Medium', 'High', 'Extra')) {
+    $shipCfg = Join-Path $sandbox "shipped-$name.cfg"
+    Copy-Item -LiteralPath $instCfg -Destination $shipCfg -Force
+    $js = "var n = hmwApplyGraphicsPreset(" + (ConvertTo-Json $shipCfg) + ", " +
+          (ConvertTo-Json $name) + ", " + (ConvertTo-Json $shippedDir) + ");"
+    [void]$engine.Execute($js)
+    $n = [int]$engine.GetValue('n').ToObject()
+    Check "shipped $name applies dvars"          { $n -ge 8 }
+    Check "shipped $name keeps windowing intact" {
+        ((PresetCfg $shipCfg 'seta r_fullscreen') -eq 'seta r_fullscreen "0"') -and
+        ((PresetCfg $shipCfg 'seta vid_ypos') -eq 'seta vid_ypos "-1"') -and
+        ((PresetCfg $shipCfg 'seta name') -eq 'seta name "Player2"')
+    }
+    Check "shipped $name duplicates nothing"     {
+        $keys = Get-Content -LiteralPath $shipCfg | Where-Object { $_ -match '^seta (\S+)' } |
+                ForEach-Object { ($_ -split ' ')[1] }
+        ($keys | Group-Object | Where-Object Count -gt 1).Count -eq 0
+    }
+}
+Check 'dropdown names all have a preset file'    {
+    $declared = ([regex]::Match($src,
+        'HMW_GRAPHICS_PRESETS\s*=\s*\[(.*?)\]').Groups[1].Value -split ',') |
+        ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ -and $_ -ne 'Default' }
+    $missing = $declared | Where-Object { -not (Test-Path (Join-Path $shippedDir "$_.cfg")) }
+    (@($declared).Count -eq 4) -and (@($missing).Count -eq 0)
+}
+
 Check 'hwgd.pf is exactly 39 bytes'             { (Get-Item -LiteralPath (Join-Path $p2 'hwgd.pf')).Length -eq 39 }
 Check 'hwgd.pf ends with a single 0x00'         {
     $b = [IO.File]::ReadAllBytes((Join-Path $p2 'hwgd.pf'))
