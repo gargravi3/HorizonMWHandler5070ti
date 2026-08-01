@@ -268,6 +268,86 @@ Verified working end to end:
 - F2 joining every guest to the host's private match
 - identity restored on normal exit, on Nucleus shutdown, and on the watcher's idle path
 
+## Session 8 (1 Aug 2026, 01:42) - three instances, the third fail-fasted after loading
+
+This run had `DebugLog=True`, so there is a full Nucleus log for it. **Graphics was `Default`**, no
+preset line appears in the handler log, which makes this a clean test of the multi-instance path.
+
+All three instances launched and **all three had ProtoInput injected successfully**:
+
+```
+[01:40:31] Launching Instance0 ... [01:40:46] Obtained pid 25024, Injecting ProtoInput
+[01:41:17] Launching Instance1 ... [01:41:32] Obtained pid 2096,  Injecting ProtoInput
+[01:42:02] Launching Instance2 ... [01:42:17] Obtained pid 22188, Injecting ProtoInput
+[01:42:43] Process is no longer running. Attempting to find process by window title
+[01:44:24] All instances accounted for, performing final preperations
+[01:44:25] Killing process hmw-mod (pid 2096) / (pid 25024)      <- only two, 22188 already dead
+```
+
+Crash, from the event log and WER:
+
+```
+Faulting application path: ...\HorizonMW\Instance2\hmw-mod.exe
+Faulting module name:      h1_mp64_ship.exe
+Exception code:            0xc0000409          STATUS_STACK_BUFFER_OVERRUN
+Sig[6] (fault offset):     0x000000000081f4ec
+EventType:                 BEX64
+loaded modules:            135, including ProtoInputHooks64.dll and nvwgf2umx.dll
+```
+
+`0xc0000409` is a **deliberate fail-fast**, the game's own `/GS` or `__fastfail` check firing, not a
+stray access violation. 135 modules with the NVIDIA user-mode driver mapped means it was fully
+loaded, matching "crashed after loading". It died 28 s after launch and 13 s after injection.
+
+### What this rules out
+
+- **Not a ProtoInput injection failure.** `ProtoInputHooks64.dll` is in the crashed process. Injection
+  worked for all three.
+- **Not the graphics preset.** This run applied none.
+- **Not the reposition path.** Instance 2 was never repositioned; it died at 01:42:30, and "final
+  preperations" was 01:44:24. Nucleus then spun for 101 s on `Update data process has not exited`.
+
+### Two distinct failures, not one
+
+The 01:30 and 01:42 crashes are different bugs, and conflating them would be a mistake:
+
+| | 01:30 (4 instances, `Low`) | 01:42 (3 instances, `Default`) |
+| --- | --- | --- |
+| instance | 1 | 2 |
+| when | 6 s after launch, **before** grab | 28 s after launch, **after** injection |
+| code | `c0000005` at address `0x8` | `c0000409` fail-fast |
+| modules | 84, no ProtoInput, no `nvwgf2umx` | 135, ProtoInput present, `nvwgf2umx` present |
+| stage | during D3D11 device creation | fully loaded and running |
+
+Instance 1 survived the whole of this preset-free run, which it did not in the 01:30 preset run. That
+is now consistent with the graphics preset having caused the earlier crash, and it is the reason
+`sm_enable "0"` and the out-of-range `r_picmip_water "3"` were taken out.
+
+### Where the third instance differs
+
+Worth noting for whoever picks this up. Instance 2 was the only instance that had **not** received
+Nucleus's legacy keyboard/mouse hook DLL, because that is injected into already-running instances
+when the *next* player is set up, and there was no player 4:
+
+```
+[01:41:15] Injecting hook DLL for previous instance   <- into instance 0
+[01:41:59] Injecting hook DLL for previous instance   <- into instance 1
+```
+
+So the instance with *fewer* hooks is the one that died, which argues against a simple
+double-hooking explanation. It also had no controller: nothing XInput was connected during this run.
+
+`Game.SupportsMultipleKeyboardsAndMice = true` enables that legacy layer, and the Nucleus readme
+marks it deprecated in favour of ProtoInput. birden's working MWR handler sets it too, so it is not
+by itself the difference. The two settings that *do* differ from that known-good handler are
+`InjectRuntime_EasyHookMethod` (birden uses `EasyHookStealthMethod`) and `UseOpenXinput = false`
+(birden uses `true`, though HMW's bundled `openxinput1_3.dll` is 32-bit while `hmw-mod.exe` is 64-bit).
+
+### Not yet determined
+
+The cause of the fail-fast is unresolved. It needs a game run per hypothesis, so it cannot be settled
+from logs alone.
+
 ## Session 7 (1 Aug 2026, 01:30) - instance 1 died 6 s into startup
 
 The reported "ProtoInput failed to inject" is a **symptom, not the cause**. The timing rules it out:
