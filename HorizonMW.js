@@ -808,24 +808,39 @@ Game.Play = function () {
     srcP2 + "\\config_mp.cfg"
   );
 
-  // VRAM, not pixels, is what limits the instance count. Each instance loads its
-  // own full copy of the texture set, so video memory scales with the number of
-  // instances and barely moves with the resolution. Measured on a 16 GB RTX 5070
-  // Ti at 2560x1440 with the Default preset: two live instances held 11621 MiB of
-  // 16303 MiB, about 5.5 GB each, leaving 4375 MiB free. A third instance needs
-  // roughly 5.5 GB, so it does not fit, and it dies partway through loading with
-  // whatever error the failed allocation happens to produce. That is why the
-  // third instance has crashed with three unrelated signatures and once survived:
-  // the shortfall is only about 1 GB, so it depends on what else is on the GPU.
+  // Two separate ceilings limit how many instances fit, and only one of them is
+  // about graphics. An earlier version of this comment blamed video memory for
+  // the dying third instance; a debugger disproved that.
   //
-  // The presets are the fix. Low drops r_picmip/r_picmip_bump/r_picmip_spec to 3,
-  // and each picmip level quarters a texture's memory, so it cuts far more than
-  // the ~30% needed to fit a third instance.
-  if (Context.PlayerID >= 2 && (!Context.Options["Graphics"] || Context.Options["Graphics"] === "Default")) {
-    hmwLog("WARNING instance " + (Context.PlayerID + 1) + " with the Default graphics preset: " +
-           "3+ instances at full texture quality can exhaust video memory and the " +
-           "extra instances then die while loading. Pick Low or Medium in the " +
-           "Graphics dropdown if this instance does not survive.");
+  // What actually kills it is the system commit limit. Both C++ exceptions in
+  // %LOCALAPPDATA%\CrashDumps land on the same eight-frame stack at 30 and 31
+  // seconds of process uptime, throwing std::runtime_error from hmw-mod.exe at
+  // RVA 0x43923c. The string that call site loads is "Failed to allocate", and
+  // every neighbouring literal in that pool belongs to HMW's own MinHook/asmjit
+  // hook installer ("Unable to create hook at location: %p", "Failed to
+  // initialize MinHook"). So the mod aborts because one small trampoline
+  // allocation was refused, not because a texture did not fit.
+  //
+  // It is always the third instance because commit runs out:
+  //     commit limit   47.2 GB   = 31.2 GB RAM + a fixed 16 GB pagefile
+  //     idle           14.4 GB
+  //     per instance   12.6 GB   private bytes, measured
+  //     three of them  52.2 GB   -> 5.1 GB past the limit
+  // Raising the pagefile raises that limit. Graphics presets barely move private
+  // bytes, which is why selecting Low did not help.
+  //
+  // The second ceiling is video memory, and it is real but further off: two
+  // instances at 1440p on Default held 11621 MiB of 16303 MiB, about 5.5 GB
+  // each, leaving a third roughly 780 MiB short. Low drops r_picmip, _bump and
+  // _spec to 3 and each level quarters a texture's memory, so it clears that
+  // easily. Resolution does not, because the instances tile one screen: 1080p
+  // saves about 31 MiB per instance of render targets.
+  if (Context.PlayerID >= 2) {
+    hmwLog("NOTE instance " + (Context.PlayerID + 1) + ": 3+ instances need both " +
+           "commit headroom (~12.6 GB each, so check the pagefile) and video " +
+           "memory headroom. Dying about 30 seconds in with no window means " +
+           "commit; dying later or rendering badly means the Graphics preset " +
+           "is too high.");
   }
   hmwLog("windowed; Nucleus slice " + Context.Width + "x" + Context.Height +
     " at " + Context.PosX + "," + Context.PosY);
