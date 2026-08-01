@@ -230,6 +230,58 @@ longer told to connect to itself, a single pid and a single window handle, and n
 restore during the session. Start to finish in 4 s for one guest, which matches the per-guest
 budget of 500 + 200 + 1000 + 750 ms plus focus time.
 
+## Session 5 - instance 1 crashed during "reposition, resize and strip borders"
+
+Session 4 looked much better but instance 1 died just as it was moved to its slice. The Nucleus
+debug log puts the crash and the resize at the same second:
+
+```
+[00:49:28] Attempting to reposition, resize and strip borders for instance 0 (pid 23332)   <- survived
+[00:49:41] Attempting to reposition, resize and strip borders for instance 1 (pid 18536)
+[00:49:41] *** hmw-mod.exe faults, exception e06d7363 in KERNELBASE.dll ***
+[00:49:43] ERROR - ResetWindows was unsuccessful for instance 1
+```
+
+`0xe06d7363` is the MSVC C++ exception marker, so HMW threw and nothing caught it. `ResetWindows`
+then "failed" only because the process was already gone. This is a different failure from the
+session 2 crash, which was `0xc0000005` in `ntdll` with no ProtoInput module loaded; here
+`ProtoInputHooks64.dll` is in the module list and D3D11 came up, so injection is fine.
+
+Two independent causes, both self-inflicted by the session 4 fix.
+
+### 1. r_mode was silently rejected, which made vid_ypos put the window off-screen
+
+Both instances rewrote `r_mode` back to `2560x1440` on exit. `r_mode` only accepts a resolution the
+monitor enumerates, and `2560x720` is not one of the 23 this display offers, where the only `*x720`
+entry is `1280x720`. So the split-size write achieved nothing, and the visual improvement in
+session 4 came entirely from `r_fullscreen "0"`, which let Nucleus resize the window.
+
+That matters because of what it does to `vid_ypos`. With `r_mode` back at native, instance 1 was
+told to create a **2560x1440** window at **y=720** on a **1440** tall screen, so half of it hung off
+the bottom. Instance 0 got `y=0` and was entirely on-screen. That is the only value that differed
+between the instance that crashed and the instance that survived.
+
+Sizing and positioning are now left entirely to Nucleus. `r_mode` is not written at all, and
+`vid_xpos`/`vid_ypos` are pinned back to the stock `-1`.
+
+Pinning them explicitly rather than just not writing them is the point: an instance set up by the
+session 4 build still has `vid_ypos "720"` on disk, and HMW rewrites `config_mp.cfg` on exit, so
+merely stopping would have let the crash reproduce forever. There is a test for exactly that.
+
+### 2. The last instance gets far less startup grace than the others
+
+Every instance except the last is repositioned when the *next* one is grabbed. The last one is
+repositioned immediately during "final preperations":
+
+| | launch | repositioned | grace |
+| --- | --- | --- | --- |
+| instance 0 | 00:48:43 | 00:49:28 | 45 s, survived |
+| instance 1 | 00:49:13 | 00:49:41 | 28 s, crashed |
+
+`PauseBetweenStarts` is what buys that time, so it goes from 10 to 25, putting the last instance at
+roughly 43 s. `PauseBetweenProcessGrab` stays at 15 so the earlier "didn't reposition fast enough"
+complaint does not come back. Two-player startup gets about 15 s longer.
+
 ## Session 4 - the second instance was cut off at the split boundary
 
 The handler set `Game.SupportsPositioning` and `Game.ResetWindows` and left it there, writing no

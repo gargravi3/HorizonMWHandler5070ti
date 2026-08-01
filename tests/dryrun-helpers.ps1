@@ -82,8 +82,7 @@ hmwSetCfgValue(players2 + '\\config_mp.cfg', 'seta net_dummy', '1');
 // re-seeding must not clobber the edit
 hmwSeedFile(srcP2 + '\\config_mp.cfg', players2 + '\\config_mp.cfg');
 
-// player 2 of a horizontal 2-way split on a 2560x1440 monitor
-hmwApplyViewport(players2 + '\\config_mp.cfg', 2560, 720, 0, 720);
+hmwApplyWindowedMode(players2 + '\\config_mp.cfg');
 
 hmwWriteGuid(players2 + '\\hwgd.pf', '{00000000-0000-4000-8000-000000000002}');
 
@@ -121,11 +120,17 @@ Check 'old seta name gone'                      { ($cfg | Where-Object { $_ -lik
 Check 'missing dvar appended'                   { ($cfg | Where-Object { $_ -eq 'seta net_dummy "1"' }).Count -eq 1 }
 Check 'other cfg lines preserved'               { ($cfg | Where-Object { $_ -eq 'seta com_maxfps "0"' }).Count -eq 1 }
 Check 'reseed did not clobber the edit'         { ($cfg | Where-Object { $_ -eq 'seta name "Player2"' }).Count -eq 1 }
-# --- viewport: the second instance was cut off at the split boundary ---------
+# --- windowed mode: instances were cut off, then crashed during the resize ---
 function CfgLine([string]$key) { @($cfg | Where-Object { $_ -like "$key `"*" }) }
 
-Check 'r_mode set to the split size'            { (CfgLine 'seta r_mode') -eq 'seta r_mode "2560x720"' }
-Check 'full-screen r_mode is gone'              { @($cfg | Where-Object { $_ -like '*2560x1440*' }).Count -eq 0 }
+# r_mode only accepts an enumerated display mode, so a split size like 2560x720
+# is reset to native by the game. Writing it was useless; writing it again would
+# be a regression.
+Check 'r_mode left at the display mode'         { (CfgLine 'seta r_mode') -eq 'seta r_mode "2560x1440"' }
+# Pre-positioning put a native-height window half off-screen, which is the only
+# value that differed between the instance that crashed and the one that did not.
+Check 'vid_xpos pinned to stock -1'             { (CfgLine 'seta vid_xpos') -eq 'seta vid_xpos "-1"' }
+Check 'vid_ypos pinned to stock -1'             { (CfgLine 'seta vid_ypos') -eq 'seta vid_ypos "-1"' }
 Check 'r_fullscreen off'                        { (CfgLine 'seta r_fullscreen') -eq 'seta r_fullscreen "0"' }
 Check 'r_fullscreenWindow off'                  { (CfgLine 'seta r_fullscreenWindow') -eq 'seta r_fullscreenWindow "0"' }
 # "seta r_fullscreen " must not also match "seta r_fullscreenWindow ", nor
@@ -135,51 +140,48 @@ Check 'r_fullscreenWindow written exactly once' { (CfgLine 'seta r_fullscreenWin
 Check 'r_renderResolutionNative on'             { (CfgLine 'seta r_renderResolutionNative') -eq 'seta r_renderResolutionNative "1"' }
 Check 'r_renderResolution left untouched'       { (CfgLine 'seta r_renderResolution') -eq 'seta r_renderResolution "3.6864"' }
 Check 'r_aspectRatio auto'                      { (CfgLine 'seta r_aspectRatio') -eq 'seta r_aspectRatio "auto"' }
-Check 'vid_xpos is the slice origin'            { (CfgLine 'seta vid_xpos') -eq 'seta vid_xpos "0"' }
-Check 'vid_ypos is the slice origin'            { (CfgLine 'seta vid_ypos') -eq 'seta vid_ypos "720"' }
-Check 'no dvar duplicated by the viewport pass' {
+Check 'no dvar duplicated by the windowed pass' {
     $keys = $cfg | Where-Object { $_ -match '^seta \S+ ' } | ForEach-Object { ($_ -split ' ')[1] }
     ($keys | Group-Object | Where-Object { $_.Count -gt 1 }).Count -eq 0
 }
-
-# A missing viewport must leave the config alone rather than write "0x0" or "NaN".
-$degenerate = Join-Path $sandbox 'degenerate.cfg'
-Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $degenerate
-[void]$engine.Execute("var degenOk = hmwApplyViewport(" + (ConvertTo-Json $degenerate) + ", 0, 0, undefined, undefined);")
-$applied = $engine.GetValue('degenOk').ToObject()
-$degenCfg = Get-Content -LiteralPath $degenerate
-Check 'zero viewport reports failure'           { $applied -eq $false }
-Check 'zero viewport writes nothing'            {
-    (@($degenCfg | Where-Object { $_ -eq 'seta r_mode "2560x1440"' }).Count -eq 1) -and
-    (@($degenCfg | Where-Object { $_ -like '*0x0*' -or $_ -like '*NaN*' }).Count -eq 0)
+# Nothing geometry dependent may be written, so two instances with different
+# slices must end up with byte-identical render settings.
+$aPath = Join-Path $sandbox 'a.cfg'; $bPath = Join-Path $sandbox 'b.cfg'
+Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $aPath
+Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $bPath
+[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ");")
+[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $bPath) + ");")
+Check 'windowed pass is geometry independent'    {
+    (Get-FileHash $aPath).Hash -eq (Get-FileHash $bPath).Hash
 }
-# A missing position must not become "NaN" when the size is valid.
-$posCfgPath = Join-Path $sandbox 'pos.cfg'
-Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $posCfgPath
-[void]$engine.Execute("hmwApplyViewport(" + (ConvertTo-Json $posCfgPath) + ", 1280, 1440, undefined, undefined);")
-$posCfg = Get-Content -LiteralPath $posCfgPath
-Check 'missing position falls back to 0'        {
-    (@($posCfg | Where-Object { $_ -eq 'seta vid_xpos "0"' }).Count -eq 1) -and
-    (@($posCfg | Where-Object { $_ -like '*NaN*' }).Count -eq 0)
+Check 'windowed pass is idempotent'              {
+    $before = (Get-FileHash $aPath).Hash
+    [void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ");")
+    (Get-FileHash $aPath).Hash -eq $before
 }
 
-# The production shape: Nucleus supplies Width/Height/PosX/PosY as CLR Int32,
-# not JS numbers. If Jint surfaced those as anything parseInt cannot read, the
-# viewport pass would silently no-op in the real handler while still passing
-# every literal-driven test above.
-Add-Type -TypeDefinition 'public class HmwCtxStub { public int Width {get;set;} public int Height {get;set;} public int PosX {get;set;} public int PosY {get;set;} }' -ErrorAction SilentlyContinue
-$clrCfgPath = Join-Path $sandbox 'clrctx.cfg'
-Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $clrCfgPath
-[void]$engine.SetValue('Context', (New-Object HmwCtxStub -Property @{ Width = 1280; Height = 1440; PosX = 1280; PosY = 0 }))
-[void]$engine.Execute("var clrOk = hmwApplyViewport(" + (ConvertTo-Json $clrCfgPath) +
-    ", Context.Width, Context.Height, Context.PosX, Context.PosY);")
-$clrCfg = Get-Content -LiteralPath $clrCfgPath
-Check 'CLR Int32 context is a JS number'        { $engine.GetValue('clrOk').ToObject() -eq $true }
-Check 'CLR Int32 context writes the viewport'   {
-    (@($clrCfg | Where-Object { $_ -eq 'seta r_mode "1280x1440"' }).Count -eq 1) -and
-    (@($clrCfg | Where-Object { $_ -eq 'seta vid_xpos "1280"' }).Count -eq 1) -and
-    (@($clrCfg | Where-Object { $_ -eq 'seta vid_ypos "0"' }).Count -eq 1) -and
-    (@($clrCfg | Where-Object { $_ -like '*NaN*' }).Count -eq 0)
+# An instance set up by the version that crashed still has the off-screen
+# position on disk. The handler has to actively undo it, not merely stop writing
+# it, or the crash reproduces on the next launch.
+$stalePath = Join-Path $sandbox 'stale.cfg'
+@(
+    'seta r_fullscreen "1"',
+    'seta r_fullscreenWindow "1"',
+    'seta r_mode "2560x1440"',
+    'seta r_aspectRatio "auto"',
+    'seta r_renderResolutionNative "0"',
+    'seta vid_xpos "0"',
+    'seta vid_ypos "720"'
+) -join "`r`n" | Set-Content -LiteralPath $stalePath -Encoding Ascii -NoNewline
+[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $stalePath) + ");")
+$staleCfg = Get-Content -LiteralPath $stalePath
+Check 'stale off-screen vid_ypos is undone'      {
+    (@($staleCfg | Where-Object { $_ -eq 'seta vid_ypos "-1"' }).Count -eq 1) -and
+    (@($staleCfg | Where-Object { $_ -eq 'seta vid_ypos "720"' }).Count -eq 0)
+}
+Check 'stale fullscreen flags are undone'        {
+    (@($staleCfg | Where-Object { $_ -eq 'seta r_fullscreen "0"' }).Count -eq 1) -and
+    (@($staleCfg | Where-Object { $_ -eq 'seta r_fullscreenWindow "0"' }).Count -eq 1)
 }
 
 Check 'hwgd.pf is exactly 39 bytes'             { (Get-Item -LiteralPath (Join-Path $p2 'hwgd.pf')).Length -eq 39 }

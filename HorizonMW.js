@@ -109,45 +109,41 @@ function hmwSetCfgValue(path, key, value) {
   System.IO.File.WriteAllText(path, lines.join("\r\n"));
 }
 
-// Pin one instance's window to its slice of the screen.
+// Put the game in windowed mode so Nucleus can size each window to its slice.
+// Without this every instance launches in borderless fullscreen, keeps rendering
+// a full-screen backbuffer wherever Nucleus moves the window, and everything
+// past the split boundary is cut off.
 //
-// Without this every instance launches at its saved r_mode in borderless
-// fullscreen, keeps rendering a full-screen backbuffer wherever Nucleus moves
-// the window, and everything past the split boundary is cut off.
+// Sizing and positioning are left entirely to Nucleus, which is what
+// Game.SupportsPositioning and Game.ResetWindows are for. In particular this
+// does not write r_mode, and it resets vid_xpos and vid_ypos rather than aiming
+// them at the slice:
 //
-// Called on every launch rather than only when players2 is seeded, because HMW
-// rewrites config_mp.cfg on exit and the split geometry changes with the player
-// count and layout.
-function hmwApplyViewport(cfgPath, width, height, posX, posY) {
-  var w = parseInt(width, 10);
-  var h = parseInt(height, 10);
-  if (!(w > 0) || !(h > 0)) {
-    hmwLog("WARNING: no viewport from Nucleus (" + width + "x" + height +
-      "), leaving resolution dvars alone");
-    return false;
-  }
-
-  var x = parseInt(posX, 10);
-  var y = parseInt(posY, 10);
-  if (isNaN(x)) { x = 0; }
-  if (isNaN(y)) { y = 0; }
-
-  // HMW stores the resolution as a single "WxH" string, unlike the separate
-  // width and height dvars of the MWR handler this was derived from.
-  hmwSetCfgValue(cfgPath, "seta r_mode", w + "x" + h);
+//   r_mode only accepts a resolution the monitor enumerates. A split size such
+//   as 2560x720 is not one (this display offers 23 modes and the only *x720 is
+//   1280x720), so HMW silently reset r_mode to 2560x1440 in every instance and
+//   writing it achieved nothing.
+//
+//   Because r_mode reverts to native, pre-positioning with vid_ypos put a
+//   full-height 1440 window at y=720 on a 1440 tall screen, half of it off the
+//   bottom of the display. That was the only value differing between the
+//   instance that crashed during "reposition, resize and strip borders" and the
+//   one that survived, so these are pinned back to the stock -1. Setting them
+//   explicitly rather than skipping them matters: an instance configured by an
+//   earlier version still has the bad value on disk, and HMW rewrites
+//   config_mp.cfg on exit so it would otherwise persist.
+//
+// Called on every launch rather than only when players2 is seeded, for the same
+// reason.
+function hmwApplyWindowedMode(cfgPath) {
   hmwSetCfgValue(cfgPath, "seta r_fullscreen", "0");
   hmwSetCfgValue(cfgPath, "seta r_fullscreenWindow", "0");
   hmwSetCfgValue(cfgPath, "seta r_aspectRatio", "auto");
-  // r_renderResolution is a megapixel count, "3.6864" for 2560x1440. Leaving it
-  // stale renders the old pixel count into the new window, so pin the render
-  // resolution to the window instead of editing that number.
+  // r_renderResolution is a megapixel count, "3.6864" for 2560x1440. Pin the
+  // render resolution to the window instead of editing that number.
   hmwSetCfgValue(cfgPath, "seta r_renderResolutionNative", "1");
-  // Place the window up front so the first frame is already correct instead of
-  // waiting for Nucleus to move it.
-  hmwSetCfgValue(cfgPath, "seta vid_xpos", "" + x);
-  hmwSetCfgValue(cfgPath, "seta vid_ypos", "" + y);
-
-  hmwLog("viewport " + w + "x" + h + " at " + x + "," + y);
+  hmwSetCfgValue(cfgPath, "seta vid_xpos", "-1");
+  hmwSetCfgValue(cfgPath, "seta vid_ypos", "-1");
   return true;
 }
 
@@ -279,7 +275,14 @@ Game.HideTaskbar = true;
 Game.PreventWindowDeactivation = false;
 Game.KeyboardPlayerSkipPreventWindowDeactivate = false;
 
-Game.PauseBetweenStarts = 10;
+// Also decides how much time the LAST instance gets before Nucleus repositions
+// it. Every other instance is repositioned when the next one is grabbed, so it
+// gets PauseBetweenStarts + PauseBetweenProcessGrab of grace, but the last one
+// is repositioned immediately in "final preperations". At 10 that gave instance
+// 1 only 28 s from launch to resize while instance 0 had 45 s, and instance 1
+// crashed mid-resize with a C++ exception while still initialising. 25 puts the
+// last instance at roughly the same 43 s.
+Game.PauseBetweenStarts = 25;
 
 // How long Nucleus waits after launching before it grabs the process, injects
 // ProtoInput and repositions the window. The base MWR handler needs 30 because
@@ -502,9 +505,10 @@ Game.Play = function () {
   // -- 4. distinct in-game name ---------------------------------------------
   hmwSetCfgValue(players2 + "\\config_mp.cfg", "seta name", "Player" + playerNo);
 
-  // -- 4b. viewport size and position ---------------------------------------
-  hmwApplyViewport(players2 + "\\config_mp.cfg",
-    Context.Width, Context.Height, Context.PosX, Context.PosY);
+  // -- 4b. windowed mode, so Nucleus can size the window to the slice --------
+  hmwApplyWindowedMode(players2 + "\\config_mp.cfg");
+  hmwLog("windowed; Nucleus slice " + Context.Width + "x" + Context.Height +
+    " at " + Context.PosX + "," + Context.PosY);
 
   // -- 5. identity isolation -------------------------------------------------
   // HMW identifies a player by %LOCALAPPDATA%\hmw-mod\hwgd.pf. If every instance
