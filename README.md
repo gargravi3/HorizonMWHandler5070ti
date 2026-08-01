@@ -826,6 +826,54 @@ Runs the handler helpers under Nucleus' own `Jint.dll` against a temp sandbox, t
 selection self test, and a syntax check of every `.ps1` plus `HorizonMW.js`. Nothing outside the
 sandbox is touched.
 
+## The startup crash, identified (1 Aug 2026, 15:11 and 15:15)
+
+Instance 1 died 27 s after launch and Nucleus stopped, having set up one instance. A retry then
+lost instance 2. Both dumps were read, and **this is the failure that has been misreported as
+"ProtoInput failed to inject" five separate times.** It is neither ProtoInput nor the graphics
+preset nor a resource limit.
+
+| | dump `17588`, 15:11:53 | dump `2264`, 15:15:57 |
+|---|---|---|
+| exception | `0xe06d7363` C++ EH | `0xc0000005` |
+| raised by | `hmw_mod` (base `0x160000000`) | `rip = 0x3bf36ae2`, **unmapped** |
+| via | `KERNELBASE!RaiseException` | return address inside `h1_mp64_ship` |
+| ProtoInput | **loaded** | **not loaded** |
+
+The frame below `RaiseException` carries address/size pairs one 64 KB granule apart:
+
+```
+00000001`d1ad0000  00000000`00010000
+00000001`d1ae0000  00000000`00010000
+```
+
+That is a hook library walking candidate slots looking for a free 64 KB block, and throwing when it
+runs out. The throwing module is **`hmw-mod.exe` itself**, not ProtoInput: HMW statically links its
+hooking library, which is why neither `minhook` nor `easyhook` appears as a loaded module. The other
+dump is the same fault one step later: the game calls a hooked function whose target was never
+validly allocated, and jumps into unmapped memory.
+
+`0x3bf36ae2` is byte-identical to the earlier dump `22232`. Both executables link at fixed bases,
+`h1_mp64_ship` at `0x140000000` and `hmw_mod` at `0x160000000`, so a computed-but-invalid target
+reproduces exactly rather than landing somewhere random. It looks like a 64-bit pointer that lost its
+high half.
+
+**Resources at the moment of the crash rule out every ceiling previously blamed:**
+
+| | at crash | limit |
+|---|---|---|
+| instances up | 2 | 4 seen working |
+| physical RAM | 12.3 GB | 31.2 GB |
+| commit | 33.2 GB | 95.2 GB |
+| video memory | 13,311 MiB | 16,303 MiB |
+
+So it is a memory-*layout* lottery at hook time, not a memory-*quantity* problem, which is why it
+survived the pagefile fix, ignores the graphics preset, and struck a run whose only change from a
+successful one was the frame cap. **It is nondeterministic: relaunch.** One caveat worth stating: the
+earlier `0xe06d7363` pair on 1 Aug was attributed to commit exhaustion, and the arithmetic there was
+sound, but the same exception now appears with 62 GB of commit free. Commit exhaustion can trigger
+this code path; it is not the only thing that does.
+
 ## Troubleshooting
 
 Three logs:
