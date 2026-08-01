@@ -36,10 +36,10 @@ param(
     # Fire one connect attempt immediately and exit, instead of watching for F2.
     [switch]$TestConnect,
 
-    # How to deliver the command. Post* uses window messages and needs no focus.
-    # Keys* brings each window to the foreground and uses SendKeys.
-    # *Toggle sends the console toggle key before and after the command.
-    [ValidateSet('BindKey', 'PostToggle', 'PostNoToggle', 'KeysToggle', 'KeysNoToggle')]
+    # How to deliver the command. Post*/BindKey use window messages and need no
+    # focus. Keys*/FocusBindKey bring each window to the foreground and use
+    # SendKeys. *Toggle sends the console toggle key before and after the command.
+    [ValidateSet('FocusBindKey', 'BindKey', 'PostToggle', 'PostNoToggle', 'KeysToggle', 'KeysNoToggle')]
     [string]$Variant,
 
     # Assert the guest selection logic against synthetic data, then exit.
@@ -48,16 +48,29 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-# The variant the F2 hotkey uses. KeysToggle is the one confirmed working.
-# BindKey: press the one key the handler bound the connect command to. This is
-# the default because KeysToggle, which was reliable with a single guest, failed
-# with two. KeysToggle uses SendKeys, which goes to whatever window is in the
-# foreground, so it has to steal focus per guest and type a whole command; that
-# got much less reliable once Game.SupportsMultipleKeyboardsAndMice was turned
-# off and Nucleus stopped installing its keyboard hook layer. BindKey posts a
-# single message straight to each guest's window handle and never touches focus.
-# KeysToggle is kept as a fallback: pass -Variant KeysToggle.
-$DefaultVariant = 'BindKey'
+# The variant the F2 hotkey uses.
+#
+# KeysToggle, because it is the only one observed connecting guests. Proven with
+# three instances: it opened the console in both guests, typed the connect command
+# and both joined. Each guest also rewrote its own config_mp.cfg in the same
+# second, which is independent evidence the input landed.
+#
+# BindKey is the counter-example and the reason this is now chosen on evidence
+# rather than design. It posts WM_KEYDOWN/WM_KEYUP directly to each window and
+# needs no focus, which is much tidier, and with the lParam overflow fixed it
+# reports successful delivery to every guest. The guests still do not connect.
+# That is exactly what happens when a game reads the keyboard through raw input
+# or DirectInput: neither API looks at a window's message queue, so a posted key
+# is invisible no matter how correctly it is formed. It was made the default once
+# on the strength of the idea alone, and never worked once.
+#
+# FocusBindKey is the variant worth having: the F3 bind, so no console and no
+# typing, delivered as a real synthesized keystroke, which is the part that
+# demonstrably reaches the game. It is deliberately NOT the default yet, because
+# it has not been observed connecting a guest, and promoting an unverified variant
+# is the mistake that cost four sessions of debugging. Prove it with
+# -TestConnect -Variant FocusBindKey, then promote it.
+$DefaultVariant = 'KeysToggle'
 
 $HostPort      = 27016
 $PollMs        = 100
@@ -332,10 +345,25 @@ function Set-WindowForeground([IntPtr]$Handle) {
 function Send-ConnectCommand {
     param([IntPtr]$Handle, [string]$Command, [string]$Mode)
 
-    # BindKey does not use $Command at all. The handler has already bound the
-    # whole connect command to $ConnectBindKey inside the guest's keys_mp.cfg,
-    # so one posted keypress is the entire delivery: no console to toggle, no
-    # text to type, no ENTER, and no focus to steal.
+    # Neither BindKey variant uses $Command: the handler has already bound the
+    # whole connect command to $ConnectBindKey in the guest's keys_mp.cfg, so a
+    # single keypress is the entire delivery, with no console to toggle, no text
+    # to type and no ENTER.
+    #
+    # FocusBindKey takes focus and sends a real synthesized keystroke. BindKey
+    # posts the key to the window instead and skips focus entirely, which is
+    # tidier but does not work: the game ignores posted keys.
+    if ($Mode -eq 'FocusBindKey') {
+        if (-not (Set-WindowForeground $Handle)) {
+            Write-Log '    could not focus window, skipping'
+            return
+        }
+        # Braced token derived from $ConnectBindKey so the key sent here can never
+        # drift from the key the handler bound.
+        [System.Windows.Forms.SendKeys]::SendWait('{' + $ConnectBindKey + '}')
+        Start-Sleep -Milliseconds 750
+        return
+    }
     if ($Mode -eq 'BindKey') {
         Send-KeyMessage $Handle $VK_CONNECT_BIND
         Start-Sleep -Milliseconds 750
@@ -357,7 +385,7 @@ function Send-ConnectCommand {
         # focused, so give up on this guest rather than guess.
         if (-not (Set-WindowForeground $Handle)) {
             Write-Log '    could not focus window, skipping'
-            return
+            return $false
         }
         # {~} is a literal tilde; a bare ~ would mean ENTER to SendKeys.
         if ($toggleConsole) { [System.Windows.Forms.SendKeys]::SendWait('{~}'); Start-Sleep -Milliseconds 500 }
@@ -368,6 +396,7 @@ function Send-ConnectCommand {
         if ($toggleConsole) { [System.Windows.Forms.SendKeys]::SendWait('{~}') }
     }
     Start-Sleep -Milliseconds 750
+    return $true
 }
 
 function Invoke-HostJoin([string]$Mode) {
@@ -385,9 +414,12 @@ function Invoke-HostJoin([string]$Mode) {
         # One guest must not be able to abandon the others. The lParam overflow
         # threw on the first guest and took the whole loop with it, so instance 2
         # was never even attempted.
+        # Count only what actually went out. Counting every call that failed to
+        # throw logged "delivered to 2 of 2" for guests that were skipped because
+        # their window could not be focused, which is how I came to believe a
+        # keypress had been delivered when nothing had been sent at all.
         try {
-            Send-ConnectCommand -Handle $g.Handle -Command $command -Mode $Mode
-            $delivered++
+            if (Send-ConnectCommand -Handle $g.Handle -Command $command -Mode $Mode) { $delivered++ }
         } catch {
             Write-Log "  instance $($g.Index) delivery failed: $($_.Exception.Message)"
         }
