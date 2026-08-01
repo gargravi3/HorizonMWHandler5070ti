@@ -450,7 +450,7 @@ Check 'a preset cannot override the cap'         {
 
 # Every shipped preset must parse, apply cleanly, and never trip the blocklist.
 $shippedDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'HorizonMW\Graphics'
-foreach ($name in @('Low', 'Medium', 'High', 'Extra')) {
+foreach ($name in @('Minimum', 'Low', 'Medium', 'High', 'Extra')) {
     $shipCfg = Join-Path $sandbox "shipped-$name.cfg"
     Copy-Item -LiteralPath $instCfg -Destination $shipCfg -Force
     $js = "var n = hmwApplyGraphicsPreset(" + (ConvertTo-Json $shipCfg) + ", " +
@@ -474,7 +474,7 @@ Check 'dropdown names all have a preset file'    {
         'HMW_GRAPHICS_PRESETS\s*=\s*\[(.*?)\]').Groups[1].Value -split ',') |
         ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ -and $_ -ne 'Default' }
     $missing = $declared | Where-Object { -not (Test-Path (Join-Path $shippedDir "$_.cfg")) }
-    (@($declared).Count -eq 4) -and (@($missing).Count -eq 0)
+    (@($declared).Count -eq 5) -and (@($missing).Count -eq 0)
 }
 
 # The dropdown wiring lives below the Game definition marker, where the Jint

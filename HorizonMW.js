@@ -427,7 +427,11 @@ Game.HandlerInterval = 100;
 //
 // This has to stay below the "Game definition" marker: the test harness executes
 // everything above that marker under a bare Jint engine with no Game object.
-var HMW_GRAPHICS_PRESETS = ["Default", "Low", "Medium", "High", "Extra"];
+// Ordered worst to best after Default, which stays first so it remains the default
+// selection. Minimum exists because Low, measured at about 3,750 MiB of video memory
+// per instance, leaves only ~530 MiB free with four instances running, and the third
+// instance to start hung with a black screen.
+var HMW_GRAPHICS_PRESETS = ["Default", "Minimum", "Low", "Medium", "High", "Extra"];
 Game.AddOption(
   "Graphics preset for every instance",
   "Lower this when running more instances. Default leaves each instance's own settings alone. Presets are editable text files in handlers\\HorizonMW\\Graphics.",
