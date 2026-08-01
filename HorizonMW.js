@@ -162,15 +162,58 @@ function hmwApplyFpsCounter(cfgPath) {
 //
 // Called on every launch rather than only when players2 is seeded, for the same
 // reason.
-function hmwApplyWindowedMode(cfgPath) {
+// Converts a pixel size to the megapixel count r_renderResolution wants. The unit
+// was established from the install config, which paired r_renderResolution "3.6864"
+// with r_mode "2560x1440", and 2560*1440 is 3,686,400 exactly.
+//
+// Trailing zeroes are trimmed so the value reads like the game's own, and there is
+// no rounding: 960*540 is 0.5184 and 1280*720 is 0.9216, both exact.
+function hmwRenderMegapixels(width, height) {
+  var w = parseInt(width, 10);
+  var h = parseInt(height, 10);
+  if (!w || !h || w < 1 || h < 1) {
+    return null;
+  }
+  var mp = (w * h) / 1000000;
+  var s = mp.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  return s;
+}
+
+// sliceWidth/sliceHeight are passed in rather than read from Context so that this
+// stays callable from the test harness, which executes everything above the Game
+// definition marker under a bare Jint engine with no Nucleus objects at all.
+function hmwApplyWindowedMode(cfgPath, sliceWidth, sliceHeight) {
   hmwSetCfgValue(cfgPath, "seta r_fullscreen", "0");
   hmwSetCfgValue(cfgPath, "seta r_fullscreenWindow", "0");
   hmwSetCfgValue(cfgPath, "seta r_aspectRatio", "auto");
-  // r_renderResolution is a megapixel count, "3.6864" for 2560x1440. Pin the
-  // render resolution to the window instead of editing that number.
-  hmwSetCfgValue(cfgPath, "seta r_renderResolutionNative", "1");
   hmwSetCfgValue(cfgPath, "seta vid_xpos", "-1");
   hmwSetCfgValue(cfgPath, "seta vid_ypos", "-1");
+
+  // Size the render target to this instance's slice.
+  //
+  // This used to pin r_renderResolutionNative "1" and leave r_renderResolution
+  // alone, on the assumption that "native" meant the window. Nothing supported
+  // that. Every instance kept r_renderResolution "3.6864" and r_mode "2560x1440"
+  // while displaying in a 960x540 window, and Low measured about 3,750 MiB of video
+  // memory per instance, which is far too much for a 0.52 megapixel window with
+  // picmip 3. A 2560x1440 render target is seven times the pixels of that window.
+  //
+  // Nucleus hands the slice size to the handler, so the correct number is known per
+  // instance and cannot be expressed as a fixed value in a preset file. Hence both
+  // dvars are now handler-owned, see HMW_PRESET_BLOCKED.
+  //
+  // Whether HMW honours r_renderResolution in windowed mode is unverified. If it
+  // does not, the cost is a setting the game ignores, and the fallback below keeps
+  // the previous behaviour when Nucleus reports no usable size.
+  var mp = hmwRenderMegapixels(sliceWidth, sliceHeight);
+  if (mp === null) {
+    hmwSetCfgValue(cfgPath, "seta r_renderResolutionNative", "1");
+    hmwLog("no slice size from Nucleus, leaving render resolution native");
+  } else {
+    hmwSetCfgValue(cfgPath, "seta r_renderResolutionNative", "0");
+    hmwSetCfgValue(cfgPath, "seta r_renderResolution", mp);
+    hmwLog("render resolution " + mp + " MP for a " + sliceWidth + "x" + sliceHeight + " slice");
+  }
   return true;
 }
 
@@ -190,7 +233,14 @@ var HMW_PRESET_BLOCKED = [
   "name",
   // Owned by the Frame cap dropdown. No shipped preset sets it, but a hand-edited
   // one silently overriding the dropdown would be very hard to spot.
-  "com_maxfps"
+  "com_maxfps",
+  // Owned by hmwApplyWindowedMode, which sizes the render target to this instance's
+  // slice. A preset file holds one fixed value and cannot know the slice size, so a
+  // preset setting these could only ever be wrong for some instance. An earlier
+  // comment here invited presets to override them; that was written while the
+  // handler wrongly assumed "native" already meant the window size.
+  "r_renderResolution",
+  "r_renderResolutionNative"
 ];
 
 function hmwPresetBlocked(dvar) {
@@ -858,14 +908,14 @@ Game.Play = function () {
   hmwSetCfgValue(players2 + "\\config_mp.cfg", "seta name", "Player" + playerNo);
 
   // -- 4b. windowed mode, so Nucleus can size the window to the slice --------
-  hmwApplyWindowedMode(players2 + "\\config_mp.cfg");
+  hmwApplyWindowedMode(players2 + "\\config_mp.cfg", Context.Width, Context.Height);
   hmwApplyFpsCounter(players2 + "\\config_mp.cfg");
 
   // -- 4c. graphics preset chosen in the Nucleus options menu ----------------
-  // Applied last so a preset can override the render settings written above,
-  // for example turning r_renderResolutionNative off and scaling the render
-  // resolution down. It cannot touch the window or identity dvars: see
-  // HMW_PRESET_BLOCKED.
+  // A preset cannot touch the window, identity, frame cap or render resolution
+  // dvars: see HMW_PRESET_BLOCKED. The render resolution used to be listed here as
+  // something a preset was welcome to override, which was wrong twice over: it is
+  // per-instance, so no fixed value in a file can be right for every slice.
   hmwApplyGraphicsPreset(
     players2 + "\\config_mp.cfg",
     Context.Options["Graphics"],
