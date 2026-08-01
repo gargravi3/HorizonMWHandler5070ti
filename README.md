@@ -268,6 +268,82 @@ Verified working end to end:
 - F2 joining every guest to the host's private match
 - identity restored on normal exit, on Nucleus shutdown, and on the watcher's idle path
 
+## Session 7 (1 Aug 2026, 01:30) - instance 1 died 6 s into startup
+
+The reported "ProtoInput failed to inject" is a **symptom, not the cause**. The timing rules it out:
+
+| time | event |
+| --- | --- |
+| 01:30:26 | instance 1 `Play()`, launch |
+| **01:30:32** | **instance 1 crashes** |
+| 01:30:41 | Nucleus grabs instance 1 and only then injects ProtoInput |
+
+Injection happens 9 s *after* the process was already dead, which is also why the WER module list has
+no `ProtoInputHooks64.dll`. The process died before injection was attempted.
+
+Crash signature, from WER: `EventType=BEX64`, `c0000005`, faulting address `0x0000000000000008`, a
+null pointer plus 8, faulting module "unknown". 84 loaded modules against 125 and 135 in the two
+earlier crashes, so it died far earlier in startup. `d3d11.dll` and `dxgi.dll` were mapped but
+`nvwgf2umx.dll`, the NVIDIA D3D11 user-mode driver, was not, which places the crash **inside D3D11
+device creation**.
+
+Only instance 1 crashed. Instance 0 ran the same 12 preset dvars and survived, and the run was
+stopped by hand at 01:31:37, so instances 2 and 3 never launched.
+
+### What the crash config proved
+
+Because instance 1 crashed it never rewrote `config_mp.cfg`, so the file on disk is exactly what the
+handler wrote. Instance 0 exited cleanly and rewrote its own, so comparing the two shows which values
+HMW **rejected**:
+
+```
+dvar                  written   instance 0 kept
+r_picmip              3         3
+r_picmip_bump         3         3
+r_picmip_spec         3         3
+r_picmip_water        3         1     <- silently clamped
+sm_enable             0         0
+```
+
+`r_picmip_water` maxes out at **1**, not 3. All presets were corrected. Everything else, including
+`sm_enable "0"`, was accepted and persisted, so those values are not invalid.
+
+### Architecture this uncovered
+
+The crashing process's module list shows the per-instance `hmw-mod.exe` copy isolates less than it
+appears to. The real game binary and its DLLs come from shared locations:
+
+```
+C:\Users\gargr\AppData\Local\hmw-mod\bin\h1_mp64_ship.exe
+C:\Users\gargr\AppData\Local\Temp\h1-tlsdll.dll
+...\steamapps\common\Call of Duty Modern Warfare Remastered\{D3DCOMPILER_47,steam_api64,amd_ags_x64,bink2w64}.dll
+```
+
+`Instance1\hmw-mod.exe` is a byte-identical copy of the install exe, but it loads the actual game out
+of `%LOCALAPPDATA%\hmw-mod\bin`, which every instance shares. Worth knowing before blaming
+per-instance state for anything.
+
+### Changes made
+
+- `r_picmip_water` corrected to its real maximum of 1 in every preset. This is the one proven bug.
+- `sm_enable "0"` removed from `Low` and left commented out with a note. It is the most invasive
+  value in the preset, and renderer init is where the crash happened, but the game accepted it and
+  instance 0 ran with it, so it is a suspect and not a proven cause. `Low` now reduces
+  `sm_maxLightsWithShadows` to 1 instead.
+- `DebugLog` was found set back to `False` in `Settings.ini`, which is why there is no
+  `debug-log.txt` for this run at all. Set back to `True`.
+
+### Still unproven
+
+The graphics preset is a suspect because it is the only new thing that affects startup before the
+grab, and the crash is in renderer init. It is **not** proven: instance 0 ran the identical config.
+To settle it, run 4 instances with **Graphics = Default**. If instance 1 still dies 6 s in, the
+preset is exonerated and the cause is in the multi-instance startup path. If it survives, the preset
+is confirmed and the next step is bisecting `Low.cfg`.
+
+Note also that 4 instances have never yet started successfully, so that path is untested independently
+of the preset.
+
 ## Graphics presets
 
 Nucleus game options menu, **"Graphics preset for every instance"**: `Default`, `Low`, `Medium`,
