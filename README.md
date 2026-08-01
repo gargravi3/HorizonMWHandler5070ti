@@ -203,7 +203,88 @@ real keypair while guests are anonymous, identity backed up and restored, `Game.
 no `hmw-mod.exe` crash in the Windows event log, and `%LOCALAPPDATA%\hmw-mod` left byte-identical
 to how it started with no stray `.nucleus-original` files.
 
-Still broken: the F2 host-join. See the next section.
+Still broken in that run: the F2 host-join. See the next section.
+
+### Why F2 did nothing, and the fix
+
+The watcher log gave it away:
+
+```
+[00:08:31] F2: connecting guests 0, 1
+[00:08:31]   instance 0 1 pid 4184 22428
+```
+
+`Index` printed `0 1` and `Id` printed `4184 22428`, so those were not two guests, they were one
+nested array. `Get-HmwInstances` ended with `,($result | Sort-Object Index)`. The unary comma
+wraps the array, returning it unrolls the *outer* array and emits the inner array as a single
+pipeline item, and `@(...)` then collects that one item. So `$all.Count` was 1 and its only
+element was the whole array.
+
+One line, three failures:
+
+1. `$_.Index -ne 0` compared against an array, which returns a non-empty array, which is truthy,
+   so **instance 0 was never excluded** and the host was told to connect to itself.
+2. `$g.Handle` was an array of two handles, so binding it to `[IntPtr]$Handle` threw.
+3. That exception escaped the loop into `finally`, which **restored the identity files while the
+   game was still running** and killed the watcher, 4 s after F2.
+
+Fixes:
+
+- `Select-HmwGuest` emits objects one at a time; no unary comma anywhere. It is a pure function
+  taking the process list as a parameter, so `-SelfTest` drives it with synthetic data. The
+  suite asserts the exact regression (`each item is a single object`) plus instance-0 exclusion
+  and numeric ordering, and the old line was replayed against those assertions to confirm it
+  reproduces `instance 0 1 pid 4184 22428` exactly.
+- The watcher only restores identity on the idle-exit path, when the game vanished without
+  `Game.OnStop` running. An exception now logs and restores nothing.
+- Wait for F2 to be released before sending anything, so a held key cannot leak into the game
+  or start the sequence twice.
+- `Stop-PreviousWatchers` now requires `-File` in the command line. Matching the script name
+  alone also matched any shell that merely mentioned it, which is not hypothetical: a diagnostic
+  command in this repo's own development killed itself that way.
+
+### The F2 sequence
+
+Per guest, in order, and only for guests (instance 0 is always excluded):
+
+```
+bring the guest window to the foreground, and verify it really is foreground
+{~}                        open the console
+connect 127.0.0.1:27016    type the command
+{ENTER}                    run it
+{~}                        close the console
+```
+
+Foreground is attempted up to 8 times, 250 ms apart, checking `GetForegroundWindow` each time;
+after the third failure it taps Alt, which loosens Windows' foreground lock. A guest that never
+comes to the foreground is skipped rather than risk typing the command into the wrong window.
+Guests always connect to the host's `27016`, never to their own port.
+
+This is the `KeysToggle` variant and it is the default. The script also has `PostToggle` and
+`PostNoToggle`, which post window messages instead and need no focus change, mirroring the
+`ControlSend` approach in birden's AutoIt implementation. To try one without relaunching
+Nucleus, while the instances are up:
+
+```powershell
+powershell -NoProfile -STA -File "C:\NucleusCoop\handlers\HorizonMW\HMWConnectHotkey.ps1" -TestConnect
+powershell -NoProfile -STA -File "...\HMWConnectHotkey.ps1" -TestConnect -Variant PostToggle
+```
+
+That fires one attempt immediately, prints the tail of the log, and exits. Change
+`$DefaultVariant` at the top of the script if a different variant proves better.
+
+Pressing F2 again re-runs the whole sequence, which is useful if a guest failed to connect,
+dropped, launched late, or the host started a new match.
+
+## Tests
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-all.ps1
+```
+
+Runs the handler helpers under Nucleus' own `Jint.dll` against a temp sandbox, the F2 guest
+selection self test, and a syntax check of every `.ps1` plus `HorizonMW.js`. Nothing outside the
+sandbox is touched.
 
 ## Troubleshooting
 
