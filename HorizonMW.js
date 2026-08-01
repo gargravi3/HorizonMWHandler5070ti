@@ -807,6 +807,26 @@ Game.Play = function () {
     Context.ScriptFolder + "\\Graphics",
     srcP2 + "\\config_mp.cfg"
   );
+
+  // VRAM, not pixels, is what limits the instance count. Each instance loads its
+  // own full copy of the texture set, so video memory scales with the number of
+  // instances and barely moves with the resolution. Measured on a 16 GB RTX 5070
+  // Ti at 2560x1440 with the Default preset: two live instances held 11621 MiB of
+  // 16303 MiB, about 5.5 GB each, leaving 4375 MiB free. A third instance needs
+  // roughly 5.5 GB, so it does not fit, and it dies partway through loading with
+  // whatever error the failed allocation happens to produce. That is why the
+  // third instance has crashed with three unrelated signatures and once survived:
+  // the shortfall is only about 1 GB, so it depends on what else is on the GPU.
+  //
+  // The presets are the fix. Low drops r_picmip/r_picmip_bump/r_picmip_spec to 3,
+  // and each picmip level quarters a texture's memory, so it cuts far more than
+  // the ~30% needed to fit a third instance.
+  if (Context.PlayerID >= 2 && (!Context.Options["Graphics"] || Context.Options["Graphics"] === "Default")) {
+    hmwLog("WARNING instance " + (Context.PlayerID + 1) + " with the Default graphics preset: " +
+           "3+ instances at full texture quality can exhaust video memory and the " +
+           "extra instances then die while loading. Pick Low or Medium in the " +
+           "Graphics dropdown if this instance does not survive.");
+  }
   hmwLog("windowed; Nucleus slice " + Context.Width + "x" + Context.Height +
     " at " + Context.PosX + "," + Context.PosY);
 
