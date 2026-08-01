@@ -180,6 +180,31 @@ built in plain JS, and `tests/dryrun-helpers.ps1` asserts a log line actually la
 the Nucleus-side injection error text in `C:\NucleusCoop\content\app.log`. Set it back to
 `False` when no longer needed.
 
+## Session 2 (1 Aug 2026, 00:07) - first working run
+
+Two instances launched, stayed up, and **each got its own controller**. No crash. The
+`PauseBetweenProcessGrab = 15` plus EasyHook runtime injection change fixed it. Handler log:
+
+```
+[00:07:03] === Play() instance 0 -> ...\Instance0
+[00:07:03] args: -nosteam -multiplayer +set net_port 27016
+[00:07:03] backed up hwgd.pf / hmw-key / hmw-key.pub
+[00:07:03] guid {00000000-0000-4000-8000-000000000001}
+[00:07:03] host keypair in place
+[00:07:33] === Play() instance 1 -> ...\Instance1
+[00:07:33] args: -nosteam -multiplayer +set net_port 27018
+[00:07:33] guid {00000000-0000-4000-8000-000000000002}
+[00:07:33] guest runs anonymously
+[00:09:17] === OnStop, restoring identity
+```
+
+Confirmed working: per-instance ports, per-instance `players2`, per-player GUIDs, host keeps the
+real keypair while guests are anonymous, identity backed up and restored, `Game.OnStop` fires,
+no `hmw-mod.exe` crash in the Windows event log, and `%LOCALAPPDATA%\hmw-mod` left byte-identical
+to how it started with no stray `.nucleus-original` files.
+
+Still broken: the F2 host-join. See the next section.
+
 ## Troubleshooting
 
 Three logs:
