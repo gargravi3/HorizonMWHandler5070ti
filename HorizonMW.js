@@ -208,9 +208,64 @@ function hmwPresetBlocked(dvar) {
 //
 // Returns the number of dvars applied, 0 for "Default", a missing file or an
 // unrecognised preset name.
-function hmwApplyGraphicsPreset(cfgPath, preset, presetDir) {
-  if (!preset || preset === "Default") {
+// Collect every dvar name that any preset file can write. This is the exact set
+// of values a preset is capable of leaving behind, so it is the set that has to
+// be revertible.
+function hmwPresetManagedDvars(presetDir) {
+  var names = {};
+  if (!System.IO.Directory.Exists(presetDir)) {
+    return names;
+  }
+  var files = System.IO.Directory.GetFiles(presetDir, "*.cfg");
+  for (var f = 0; f < files.length; f++) {
+    var lines = System.IO.File.ReadAllLines(files[f]);
+    for (var i = 0; i < lines.length; i++) {
+      var line = ("" + lines[i]).replace(/^\s+|\s+$/g, "");
+      if (line === "" || line.indexOf("//") === 0 || line.indexOf("#") === 0) {
+        continue;
+      }
+      var m = /^(?:seta\s+)?([A-Za-z0-9_]+)\s+/.exec(line);
+      if (m && !hmwPresetBlocked(m[1])) {
+        names[m[1]] = true;
+      }
+    }
+  }
+  return names;
+}
+
+// "Default" used to be a no-op, which meant presets were one-way: selecting Low
+// once wrote its values into that instance's config permanently, and switching
+// back to Default reverted nothing. Instance configs then drifted into mixtures
+// that matched no preset, and kept stale values from older versions of the preset
+// files. One instance was still carrying r_picmip "3" and sm_enable "0" from a
+// Low run long after the dropdown had been set back to Default.
+//
+// So Default now actively restores each preset-managed dvar to whatever the
+// user's own installed config has, which is a value the game itself wrote and
+// therefore accepts. Dvars the presets never touch are left alone, so per
+// instance settings the user changed in-game survive.
+function hmwRevertGraphicsPreset(cfgPath, presetDir, srcCfg) {
+  if (!System.IO.File.Exists(srcCfg)) {
+    hmwLog("graphics Default: no install config at " + srcCfg + ", leaving settings alone");
     return 0;
+  }
+  var managed = hmwPresetManagedDvars(presetDir);
+  var srcLines = System.IO.File.ReadAllLines(srcCfg);
+  var reverted = 0;
+  for (var i = 0; i < srcLines.length; i++) {
+    var m = /^seta\s+([A-Za-z0-9_]+)\s+"([^"]*)"\s*$/.exec("" + srcLines[i]);
+    if (m && managed[m[1]]) {
+      hmwSetCfgValue(cfgPath, "seta " + m[1], m[2]);
+      reverted++;
+    }
+  }
+  hmwLog("graphics Default: restored " + reverted + " preset-managed dvar(s) from the install config");
+  return reverted;
+}
+
+function hmwApplyGraphicsPreset(cfgPath, preset, presetDir, srcCfg) {
+  if (!preset || preset === "Default") {
+    return hmwRevertGraphicsPreset(cfgPath, presetDir, srcCfg);
   }
 
   var path = presetDir + "\\" + preset + ".cfg";
@@ -691,7 +746,8 @@ Game.Play = function () {
   hmwApplyGraphicsPreset(
     players2 + "\\config_mp.cfg",
     Context.Options["Graphics"],
-    Context.ScriptFolder + "\\Graphics"
+    Context.ScriptFolder + "\\Graphics",
+    srcP2 + "\\config_mp.cfg"
   );
   hmwLog("windowed; Nucleus slice " + Context.Width + "x" + Context.Height +
     " at " + Context.PosX + "," + Context.PosY);

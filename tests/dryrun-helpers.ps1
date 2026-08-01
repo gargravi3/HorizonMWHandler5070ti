@@ -37,7 +37,12 @@ $srcP2 = Join-Path $sandbox 'src'
     'seta vid_ypos "-1"',
     'seta r_fullscreen "1"',
     'seta r_fullscreenWindow "1"',
-    'seta r_mode "2560x1440"'
+    'seta r_mode "2560x1440"',
+    # Game-written values for dvars the presets manage. Selecting Default has to
+    # restore these, so they have to exist in the install config to restore from.
+    'seta r_picmip "0"',
+    'seta sm_enable "1"',
+    'seta r_texFilterAnisoMax "4"'
 ) -join "`r`n" | Set-Content -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Encoding Ascii -NoNewline
 '{}' | Set-Content -LiteralPath (Join-Path $srcP2 'history.json') -Encoding Ascii -NoNewline
 # A realistic keys_mp.cfg: the game's real header, the unbindall the bind has to
@@ -265,9 +270,10 @@ New-Item -ItemType Directory -Path $presetDir -Force | Out-Null
 
 $instCfg = Join-Path $p2 'config_mp.cfg'
 
-function ApplyPreset([string]$preset, [string]$cfg) {
+function ApplyPreset([string]$preset, [string]$cfg, [string]$srcCfg = (Join-Path $srcP2 'config_mp.cfg')) {
     $js = "var applied = hmwApplyGraphicsPreset(" + (ConvertTo-Json $cfg) + ", " +
-          (ConvertTo-Json $preset) + ", " + (ConvertTo-Json $presetDir) + ");"
+          (ConvertTo-Json $preset) + ", " + (ConvertTo-Json $presetDir) + ", " +
+          (ConvertTo-Json $srcCfg) + ");"
     [void]$engine.Execute($js)
     return [int]$engine.GetValue('applied').ToObject()
 }
@@ -275,13 +281,41 @@ function PresetCfg([string]$cfg, [string]$key) {
     @(Get-Content -LiteralPath $cfg | Where-Object { $_ -like "$key *" })
 }
 
-# "Default" must be a complete no-op, since it is the default selection.
+# "Default" must undo a preset, not sit there doing nothing. When it was a no-op,
+# selecting Low once left r_picmip "3" and sm_enable "0" in that instance's config
+# permanently, and a real instance was still carrying them long after the dropdown
+# had been put back to Default. It crashed 6 s into startup.
 $defCfg = Join-Path $sandbox 'preset-default.cfg'
 Copy-Item -LiteralPath $instCfg -Destination $defCfg -Force
-$defBefore = Get-Content -LiteralPath $defCfg -Raw
+# Something the user changed in-game that no preset manages: must survive.
+[void]$engine.Execute("hmwSetCfgValue(" + (ConvertTo-Json $defCfg) + ", 'seta cg_fov', '80');")
+[void](ApplyPreset 'Low' $defCfg)
+Check 'drifted first, so the revert is not vacuous' {
+    ((PresetCfg $defCfg 'seta r_picmip') -contains 'seta r_picmip "3"') -and
+    ((PresetCfg $defCfg 'seta sm_enable') -eq 'seta sm_enable "0"') -and
+    ((PresetCfg $defCfg 'seta r_texFilterAnisoMax') -eq 'seta r_texFilterAnisoMax "1"')
+}
 $defCount = ApplyPreset 'Default' $defCfg
-Check 'Default preset applies nothing'           { $defCount -eq 0 }
-Check 'Default preset changes no bytes'          { (Get-Content -LiteralPath $defCfg -Raw) -eq $defBefore }
+Check 'Default reverted the drifted dvars'       {
+    ((PresetCfg $defCfg 'seta r_picmip') -contains 'seta r_picmip "0"') -and
+    ((PresetCfg $defCfg 'seta sm_enable') -eq 'seta sm_enable "1"') -and
+    ((PresetCfg $defCfg 'seta r_texFilterAnisoMax') -eq 'seta r_texFilterAnisoMax "4"')
+}
+Check 'Default reported what it restored'        { $defCount -ge 3 }
+Check 'Default left an unmanaged dvar alone'     { (PresetCfg $defCfg 'seta cg_fov') -eq 'seta cg_fov "80"' }
+Check 'Default did not resurrect blocked dvars'  {
+    ((PresetCfg $defCfg 'seta name') -eq 'seta name "Player2"') -and
+    ((PresetCfg $defCfg 'seta vid_ypos') -eq 'seta vid_ypos "-1"') -and
+    ((PresetCfg $defCfg 'seta r_fullscreen') -eq 'seta r_fullscreen "0"')
+}
+# A missing install config must not wipe anything.
+$noSrcCfg = Join-Path $sandbox 'preset-nosrc.cfg'
+Copy-Item -LiteralPath $instCfg -Destination $noSrcCfg -Force
+$noSrcBefore = Get-Content -LiteralPath $noSrcCfg -Raw
+$noSrcCount = ApplyPreset 'Default' $noSrcCfg (Join-Path $sandbox 'does-not-exist.cfg')
+Check 'Default with no install config is a no-op' {
+    ($noSrcCount -eq 0) -and ((Get-Content -LiteralPath $noSrcCfg -Raw) -eq $noSrcBefore)
+}
 
 # An unknown or missing preset must also change nothing rather than throw.
 $missCfg = Join-Path $sandbox 'preset-missing.cfg'
