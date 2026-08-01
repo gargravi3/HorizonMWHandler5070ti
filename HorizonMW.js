@@ -822,17 +822,12 @@ Game.Play = function () {
   // -- 2. unique network port ----------------------------------------------
   // The engine uses net_port and net_port+1, hence the step of 2. Guests always
   // connect to the host's port, HMW_HOST_PORT.
-  // logfile 2 turns on the game's own console log and flushes it per line, so it
-  // survives a crash. Added because a starting instance now dies intermittently with
-  // the identical preset, cap and slice geometry that worked minutes earlier, and
-  // every account of these crashes has come from outside the game: a dump, an event
-  // log entry, or Nucleus reporting a failed injection into a process that had
-  // already exited. None of them say what the game was loading when it died.
-  //
-  // Passed on the command line rather than written to config_mp.cfg because logfile
-  // is not an archived dvar. Whether HMW honours it is unverified: look for
-  // console_mp.log alongside games_mp.log after a run.
-  var args = "-nosteam -multiplayer +set logfile 2 +set net_port " + (HMW_HOST_PORT + Context.PlayerID * 2);
+  // "+set logfile 2" was tried here to get the game's own console log, since every
+  // account of these crashes comes from outside the game. It was removed after a
+  // four instance run produced no console_mp.log anywhere under the instance folders
+  // or the install, so HMW does not honour the dvar. Left recorded so it is not
+  // tried a second time; the per-instance games_mp.log is the log that does work.
+  var args = "-nosteam -multiplayer +set net_port " + (HMW_HOST_PORT + Context.PlayerID * 2);
   Game.StartArguments = args;
   Context.StartArguments = args;
   hmwLog("args: " + args);
