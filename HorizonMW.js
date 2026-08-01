@@ -484,50 +484,45 @@ Game.DrawFakeMouseCursor = false;
 // from "Injecting ProtoInput at runtime", so each instance ends up hosting two
 // independent hooking systems.
 //
-// This is the next thing to try if the injection-method change does not fix the
-// third instance fail-fasting: setting it to false removes that whole layer, and
-// it is safe for a controller-only setup, which is what this machine uses.
-// Do not turn it off if multiple keyboards and mice are ever needed.
+// Now OFF. This is the current experiment for the third instance fail-fasting
+// with 0xc0000409: it removes the legacy layer entirely, so ProtoInput is the
+// only thing hooking each instance. Safe here because this machine uses
+// controllers only, and controllers go through Game.ProtoInput.XinputHook below,
+// not through this.
 //
-// Kept true for now because the known-good MWR handler also sets it, and because
-// the instance that crashed was the only one that had NOT received this hook DLL,
-// which argues against it being the cause.
-Game.SupportsMultipleKeyboardsAndMice = true;
+// Turn it back on if multiple keyboards and mice are ever needed. Note the
+// evidence is not strongly against it: the instance that died was the only one
+// that had NOT received this hook DLL, and the known-good MWR handler sets it
+// true. It is being tried because the injection method has now been eliminated.
+Game.SupportsMultipleKeyboardsAndMice = false;
 
-// Injection method. Currently the stealth method, which is what the base MWR
-// handler uses. Enable exactly one of these four lines.
+// Injection method. EasyHook runtime injection, the documented default.
 //
-// History, because this has been flipped once already and the evidence is easy
-// to misread:
+// DO NOT switch this to the stealth method. It has now been tested twice on this
+// machine and it kills the process both times, even though it is what the base
+// MWR handler uses:
 //
-//   The stealth method was originally in place and the second instance died
-//   30.5 s after launch with an access violation inside ntdll.dll and no
-//   ProtoInput module in its loaded module list, so the injection itself had
-//   faulted. Both the method AND PauseBetweenProcessGrab were changed in
-//   response, 30 down to 15, which fixed injection but left it ambiguous which
-//   of the two changes was responsible. Stealth was never actually cleared.
+//   1st test, PauseBetweenProcessGrab = 30: the second instance died 30.5 s after
+//   launch with an access violation inside ntdll.dll and no ProtoInput module in
+//   its loaded module list. Both the method and the grab pause were changed in
+//   response, 30 down to 15, which left it ambiguous which change fixed it.
 //
-//   With EasyHookMethod, injection succeeds reliably: three instances were
-//   injected in one run and ProtoInputHooks64.dll is present in all of them.
-//   But the third instance then fail-fasted 13 s later, inside
-//   h1_mp64_ship.exe at +0x81f4ec with 0xc0000409, STATUS_STACK_BUFFER_OVERRUN.
-//   That is the game's own /GS or __fastfail check firing, and it happened with
-//   the renderer fully up and 135 modules loaded, so the injection landed and
-//   something it did was later rejected by the game's own integrity checking.
+//   2nd test, PauseBetweenProcessGrab = 15: the FIRST instance died within 25 s
+//   of injection, and this time there was no exception at all. No Application
+//   Error event and no WER report, so the process was not faulting, it was
+//   exiting. Nucleus went straight from "Injecting ProtoInput at runtime into pid
+//   21936" to "Process is no longer running".
 //
-// So this reverts to the method the known-good MWR handler uses, now paired with
-// PauseBetweenProcessGrab = 15 rather than the 30 it originally had, which also
-// disambiguates that earlier double change.
+//   That second test isolates the earlier ambiguity: the grab pause was not what
+//   fixed injection, the method was. Stealth is simply incompatible here, and a
+//   silent exit rather than a fault suggests the game notices it and quits.
 //
-// How to read the result: if injection fails again, the crashed process's WER
-// module list will have no ProtoInputHooks64.dll and Nucleus logs "ProtoInput
-// failed to runtime inject". If injection succeeds and the third instance still
-// fail-fasts with 0xc0000409, the injection method is not the cause and the next
-// lever is Game.SupportsMultipleKeyboardsAndMice below.
+// With EasyHookMethod injection is reliable: three instances in one run all had
+// ProtoInputHooks64.dll loaded, and two-instance sessions work end to end.
 Game.ProtoInput.InjectStartup = false;
 Game.ProtoInput.InjectRuntime_RemoteLoadMethod = false;
-Game.ProtoInput.InjectRuntime_EasyHookMethod = false;
-Game.ProtoInput.InjectRuntime_EasyHookStealthMethod = true;
+Game.ProtoInput.InjectRuntime_EasyHookMethod = true;
+Game.ProtoInput.InjectRuntime_EasyHookStealthMethod = false;
 
 Game.LockInputAtStart = false;
 Game.LockInputSuspendsExplorer = true;
