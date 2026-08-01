@@ -853,6 +853,32 @@ hooking library, which is why neither `minhook` nor `easyhook` appears as a load
 dump is the same fault one step later: the game calls a hooked function whose target was never
 validly allocated, and jumps into unmapped memory.
 
+**Why it ran out, measured.** An x64 hook patches a `rel32` jump, so the trampoline has to land within
+±2 GB of the code being hooked. Against `h1_mp64_ship` at `0x140000000`, 283 MB of image:
+
+| | |
+|---|---|
+| distance from the image end to the slot being tried | 2,147,203,584 bytes |
+| `rel32` limit, 2^31 - 1 | 2,147,483,647 bytes |
+| **headroom remaining** | **280,063 bytes, 0.27 MB** |
+
+The library had scanned to within a quarter of a megabyte of the absolute edge of its reach. Everything
+nearer the game image was already taken, and the next step ran off the end and threw.
+
+**So the constraint is a 2 GB window of virtual address space next to the game image, not the amount of
+memory in the machine.** That explains the whole shape of this bug: it is untouched by the pagefile, by
+16 GB of video memory and by 31 GB of RAM, because none of those widen that window. It is
+nondeterministic because allocation order varies with load timing. And it is deterministic *in the
+crash address* because neither executable sets `DYNAMICBASE`: `hmw-mod.exe` has
+`DllCharacteristics 0x8120` and `h1_mp64_ship.exe` `0xC120`, so both load at fixed bases every time and
+a computed-but-invalid pointer reproduces to the byte.
+
+One practical consequence, offered as a hypothesis rather than a measurement: anything that makes the
+game reserve more address space early, which is what higher texture settings do, crowds that window
+before the hooks are installed. Every observed four-instance success so far has been at `Low` or
+`Minimum`; the failures cluster at `Medium`. That is 1 success against 3 failures at `Medium`, which is
+suggestive and not proof.
+
 `0x3bf36ae2` is byte-identical to the earlier dump `22232`. Both executables link at fixed bases,
 `h1_mp64_ship` at `0x140000000` and `hmw_mod` at `0x160000000`, so a computed-but-invalid target
 reproduces exactly rather than landing somewhere random. It looks like a 64-bit pointer that lost its
