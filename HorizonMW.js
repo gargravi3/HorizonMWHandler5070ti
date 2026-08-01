@@ -17,10 +17,21 @@ var HMW_HOST_PORT = 27016;
 
 // --- small helpers ---------------------------------------------------------
 
+// Timestamp is built in plain JS: Jint cannot call System.DateTime.Now.ToString(),
+// it raises "Object has no method 'ToString'", which previously made every log
+// write fail silently.
+function hmwTimestamp() {
+  var d = new Date();
+  function p(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+
 function hmwLog(msg) {
   try {
     var log = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "HorizonMWHandler.log");
-    System.IO.File.AppendAllText(log, "[" + System.DateTime.Now.ToString("HH:mm:ss") + "] " + msg + "\r\n");
+    System.IO.File.AppendAllText(log, "[" + hmwTimestamp() + "] " + msg + "\r\n");
   } catch (e) {}
 }
 
@@ -227,7 +238,14 @@ Game.PreventWindowDeactivation = false;
 Game.KeyboardPlayerSkipPreventWindowDeactivate = false;
 
 Game.PauseBetweenStarts = 10;
-Game.PauseBetweenProcessGrab = 30;
+
+// How long Nucleus waits after launching before it grabs the process, injects
+// ProtoInput and repositions the window. The base MWR handler needs 30 because
+// h1-mod.exe has to spawn a separate h1_mp64_ship.exe; hmw-mod.exe is the game
+// process from the start, so it does not need anywhere near that long, and 30
+// left the windows sitting unpositioned for half a minute. Raise this again if
+// an instance gets grabbed before its window exists.
+Game.PauseBetweenProcessGrab = 15;
 
 Game.StartArguments = "-nosteam -multiplayer";
 Game.KillProcessesOnClose = [];
@@ -276,10 +294,21 @@ Game.DrawFakeMouseCursor = false;
 
 Game.SupportsMultipleKeyboardsAndMice = true;
 
+// Injection method. The base MWR handler uses the stealth method, which
+// ProtoInput's own readme describes as the last resort for games that actively
+// block injection. Against hmw-mod.exe it killed the second instance: that
+// process died 30.5 s after launch (PauseBetweenProcessGrab was 30) with an
+// access violation inside ntdll.dll and no ProtoInput module in its loaded
+// module list, i.e. the injection itself faulted, and Nucleus reported
+// "ProtoInput failed to runtime inject". EasyHook runtime injection is the
+// documented default and is what ProtoInput recommends trying first.
+//
+// If injection still fails, these four lines are the knob: enable exactly one.
+// Order to try: EasyHookMethod, RemoteLoadMethod, InjectStartup, EasyHookStealthMethod.
 Game.ProtoInput.InjectStartup = false;
 Game.ProtoInput.InjectRuntime_RemoteLoadMethod = false;
-Game.ProtoInput.InjectRuntime_EasyHookMethod = false;
-Game.ProtoInput.InjectRuntime_EasyHookStealthMethod = true;
+Game.ProtoInput.InjectRuntime_EasyHookMethod = true;
+Game.ProtoInput.InjectRuntime_EasyHookStealthMethod = false;
 
 Game.LockInputAtStart = false;
 Game.LockInputSuspendsExplorer = true;

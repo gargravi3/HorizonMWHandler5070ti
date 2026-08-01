@@ -38,6 +38,13 @@ $appdata = Join-Path $sandbox 'appdata'
 $engine = New-Object Jint.Engine ([Action[Jint.Options]] { param($o) [void]$o.AllowClr() })
 [void]$engine.Execute($prelude)
 
+# hmwLog swallows its own errors, so prove it actually writes. Jint cannot call
+# System.DateTime.Now.ToString(), which once made every log write a silent no-op.
+$logPath = Join-Path $env:TEMP 'HorizonMWHandler.log'
+$logBefore = if (Test-Path -LiteralPath $logPath) { (Get-Item -LiteralPath $logPath).Length } else { 0 }
+$logMarker = 'dryrun-marker-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+[void]$engine.Execute("hmwLog(" + (ConvertTo-Json $logMarker) + ");")
+
 # Point the identity helpers at the sandbox instead of the real %LOCALAPPDATA%.
 [void]$engine.Execute("hmwRealAppData = function () { return " + (ConvertTo-Json $appdata) + "; };")
 
@@ -85,6 +92,11 @@ $p2  = Join-Path $sandbox 'inst\players2'
 $cfg = Get-Content -LiteralPath (Join-Path $p2 'config_mp.cfg')
 
 "dry run in $sandbox"
+Check 'hmwLog actually writes to the log file'  {
+    (Test-Path -LiteralPath $logPath) -and
+    (Get-Item -LiteralPath $logPath).Length -gt $logBefore -and
+    (@(Get-Content -LiteralPath $logPath | Where-Object { $_ -match "^\[\d\d:\d\d:\d\d\] $logMarker$" }).Count -eq 1)
+}
 Check 'players2 and players2\user created'      { (Test-Path (Join-Path $p2 'user')) }
 Check 'config_mp.cfg seeded'                    { Test-Path (Join-Path $p2 'config_mp.cfg') }
 Check 'favourites.json created as []'           { (Get-Content -LiteralPath (Join-Path $p2 'favourites.json') -Raw) -eq '[]' }

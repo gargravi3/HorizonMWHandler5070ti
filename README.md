@@ -122,13 +122,87 @@ anyway.
 Do not run XInputPlus alongside ProtoInput; doubling up the restriction breaks wireless
 controllers.
 
+## Session 1 findings (31 Jul 2026, 23:48)
+
+Two instances launched, save and identity isolation worked, `Game.OnStop` fired and restored
+the identity files. Two problems, both now addressed.
+
+### Instance 2 crashed and Nucleus reported "ProtoInput failed to runtime inject"
+
+The crash and the injection failure are one event, not two: the injection attempt itself
+faulted inside the game process, which both killed the game and left Nucleus reporting a failed
+inject. From the Windows Error Reporting record (`AppCrash_hmw-mod.exe_...\Report.wer`):
+
+- process start `23:49:40.503`, crash `23:50:11`, i.e. **30.5 s after launch** while
+  `Game.PauseBetweenProcessGrab` was `30`. The crash is the injection moment.
+- faulting module `ntdll.dll`, exception `0xc0000005`, offset `0xb1eb`.
+- of the 125 loaded modules, **no ProtoInput or EasyHook module is present**, so the DLL never
+  finished loading. The fault is inside the loader during injection.
+- instance 1 was not affected; only one crash event exists.
+
+Ruled out along the way:
+
+- **Not the 32-bit `openxinput1_3.dll`.** `UseOpenXinput` was already `false` and no
+  `openxinput*` or instance-local `xinput*` DLL appears in the loaded module list. Every
+  non-Windows module loaded was x64.
+- **Not a shared-file conflict.** `%TEMP%\h1-tlsdll.dll`, which hmw-mod writes and loads, was
+  last modified at 11:37 that morning, so neither instance rewrote it under the other. Both
+  instances mapping the shared `%LOCALAPPDATA%\hmw-mod\bin\h1_mp64_ship.exe` read-only was
+  also fine, it is in the loaded module list of the crashed process.
+
+Fix: switched from `InjectRuntime_EasyHookStealthMethod` to `InjectRuntime_EasyHookMethod`.
+ProtoInput's own readme says *"For runtime injection, EasyHook Inject will work for most games.
+If it doesn't, try Remote Load Library. Some games that block injection may work with Stealth
+Inject."* The base MWR handler was using the last-resort method against a different binary
+(`h1_mp64_ship.exe`, spawned by a launcher) than we inject into here.
+
+If injection still fails, enable exactly one of the four `Game.ProtoInput.Inject*` lines. Try
+them in this order: `InjectRuntime_EasyHookMethod`, `InjectRuntime_RemoteLoadMethod`,
+`InjectStartup`, `InjectRuntime_EasyHookStealthMethod`. If all four fail, the next thing to
+try is `Game.SetWindowHook = false`, since that injects a second Nucleus DLL at the same moment.
+
+### Instance 1 repositioned too slowly
+
+Same root setting: `Game.PauseBetweenProcessGrab = 30` meant Nucleus waited half a minute after
+launch before grabbing the process and moving the window. The base handler needs 30 because
+`h1-mod.exe` has to spawn a separate `h1_mp64_ship.exe`; `hmw-mod.exe` is the game process from
+the start. Lowered to **15**. Raise it again if an instance gets grabbed before its window
+exists. `Ctrl+R` re-runs the repositioning by hand at any time.
+
+### Handler log was silently empty
+
+`hmwLog` used `System.DateTime.Now.ToString("HH:mm:ss")`. Jint raises *"Object has no method
+'ToString'"* on that, and `hmwLog` swallows its own exceptions, so every log write was a no-op
+and the first diagnosis had to come from Windows crash reports instead. The timestamp is now
+built in plain JS, and `tests/dryrun-helpers.ps1` asserts a log line actually lands.
+
+`DebugLog` was also switched to `True` in `C:\NucleusCoop\Settings.ini` so the next run records
+the Nucleus-side injection error text in `C:\NucleusCoop\content\app.log`. Set it back to
+`False` when no longer needed.
+
 ## Troubleshooting
 
-Two logs:
+Three logs:
 
 - `%TEMP%\HorizonMWHandler.log` - per-instance handler steps: ports, GUIDs, identity
   backup/restore, watcher startup.
 - `%TEMP%\HMWConnectHotkey.log` - watcher lifecycle and every F2 press.
+- `C:\NucleusCoop\content\app.log` - the Nucleus side, including ProtoInput injection errors.
+  Needs `DebugLog=True` in `Settings.ini`. Renamed to `<date>_<time>.log` when Nucleus exits.
+
+For a game crash, the most informative source is the Windows Error Reporting record:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000} |
+  Where-Object { $_.Message -match 'hmw-mod' } | Select-Object -First 1 -Expand Message
+Get-ChildItem "$env:ProgramData\Microsoft\Windows\WER\ReportArchive" -Directory |
+  Where-Object Name -like 'AppCrash_hmw-mod.exe*' | Sort-Object LastWriteTime -Desc |
+  Select-Object -First 1 | Get-ChildItem | Get-Content | Select-String 'LoadedModule|Sig\['
+```
+
+The loaded module list tells you whether ProtoInput actually got in, and the fault offset plus
+the interval between process start and crash tells you whether the crash coincides with
+`PauseBetweenProcessGrab`.
 
 If Nucleus is killed hard mid-session, `%LOCALAPPDATA%\hmw-mod\*.nucleus-original` may still be
 present. Launch a session and close it normally, or copy those files back over their originals
