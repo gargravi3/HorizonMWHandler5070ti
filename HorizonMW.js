@@ -444,7 +444,32 @@ Game.FileSymlinkCopyInstead = [
   "SteamAPIUpdater.dll",
   "steamclient.dll",
   "XGamepad.dll",
-  "h1_sp64_ship.exe"
+  "h1_sp64_ship.exe",
+  // Shared state the game WRITES during a session. Everything under main\ is
+  // symlinked, so before this each instance was reading and writing the same
+  // physical file in the Steam install, which is exactly the cross-instance
+  // interference the rest of this handler exists to prevent.
+  //
+  // Found by listing files in the install that changed during a session:
+  //   10:55:08  main\toc0.dcache      549648 bytes
+  //   11:30:42  main\toc1.dcache      549648 bytes
+  //   11:32:08  main\recipes\cmr_history  872 bytes
+  //   10:58:33  imgui.ini                 239 bytes
+  // Each toc write landed about six seconds after an instance started, and in
+  // the 11:29 run the instance that wrote toc1.dcache is the one that vanished
+  // 35 seconds later. That is circumstantial, not proof, but a shared cache
+  // rewritten underneath two running instances is a real defect either way, and
+  // its timing dependence would explain why the third instance fails
+  // intermittently rather than every time.
+  //
+  // Copies rather than exclusions: excluded files are skipped entirely, and the
+  // game expects these to exist. Cost is about 1.1 MB per instance.
+  "toc0.dcache",
+  "toc1.dcache",
+  "data0.dcache",
+  "data1.dcache",
+  "cmr_history",
+  "imgui.ini"
 ];
 
 Game.NeedsSteamEmulation = false;
@@ -544,16 +569,26 @@ Game.DrawFakeMouseCursor = false;
 // from "Injecting ProtoInput at runtime", so each instance ends up hosting two
 // independent hooking systems.
 //
-// Now OFF. This is the current experiment for the third instance fail-fasting
-// with 0xc0000409: it removes the legacy layer entirely, so ProtoInput is the
-// only thing hooking each instance. Safe here because this machine uses
-// controllers only, and controllers go through Game.ProtoInput.XinputHook below,
-// not through this.
+// Off, but do NOT read anything into that: this setting was tried as a fix for
+// the third instance dying and it turned out not to do what was assumed.
 //
-// Turn it back on if multiple keyboards and mice are ever needed. Note the
-// evidence is not strongly against it: the instance that died was the only one
-// that had NOT received this hook DLL, and the known-good MWR handler sets it
-// true. It is being tried because the injection method has now been eliminated.
+// The assumption was that it controls Nucleus' deprecated keyboard/mouse hook
+// layer, so turning it off would leave ProtoInput as the only thing hooking each
+// instance. The debug log from the 11:29 run disproves that. With this set to
+// false, Nucleus still logged, for every instance:
+//     Creating raw input window
+//     Injecting hook DLL for previous instance
+//     Injecting hooks DLL
+// So the legacy layer is still installed and this flag does not remove it.
+//
+// Two conclusions follow. First, that experiment never actually ran, so nothing
+// was learned from the three-instance run that appeared to succeed after it.
+// Second, the layer cannot be ruled out as a cause, because there is still no
+// way found to disable it from a handler script.
+//
+// Left false only because it is harmless on a controller-only machine and
+// changing it back would be another pointless variable. Set it true if multiple
+// keyboards and mice are ever needed.
 Game.SupportsMultipleKeyboardsAndMice = false;
 
 // Injection method. EasyHook runtime injection, the documented default.

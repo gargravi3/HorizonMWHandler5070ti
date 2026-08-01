@@ -55,6 +55,30 @@ if (Test-Path $jint) {
 }
 
 ""
+"=== per-instance isolation of shared writable game files ==="
+# Everything under main\ is symlinked, so any file the game writes there is one
+# physical file shared by every instance unless it is listed for hardcopy. These
+# were found by diffing the install after a session; losing an entry would
+# silently reintroduce cross-instance interference.
+$js = [IO.File]::ReadAllText((Join-Path $repo 'HorizonMW.js'))
+$copyBlock = [regex]::Match($js, 'Game\.FileSymlinkCopyInstead\s*=\s*\[(.*?)\];', 'Singleline')
+$exclBlock = [regex]::Match($js, 'Game\.FileSymlinkExclusions\s*=\s*\[(.*?)\];', 'Singleline')
+function Listed([System.Text.RegularExpressions.Match]$m, [string]$name) {
+    if (-not $m.Success) { return $false }
+    # Strip // comments so a filename merely mentioned in prose does not count.
+    $body = ($m.Groups[1].Value -split "`n" | Where-Object { $_ -notmatch '^\s*//' }) -join "`n"
+    return [bool]([regex]::IsMatch($body, '"' + [regex]::Escape($name) + '"'))
+}
+foreach ($f in @('toc0.dcache','toc1.dcache','data0.dcache','data1.dcache','cmr_history','imgui.ini')) {
+    if (Listed $copyBlock $f) { "  PASS  $f is hardcopied per instance" }
+    else { "  FAIL  $f would be symlinked and shared by every instance"; $failed++ }
+    if (Listed $exclBlock $f) { "  FAIL  $f is also excluded, so no instance would get it"; $failed++ }
+}
+# Non-vacuity: a name that is only mentioned in a comment must not count as listed.
+if (Listed $copyBlock 'definitely-not-a-real-file.dcache') { "  FAIL  the listing check matches anything"; $failed++ }
+else { "  PASS  listing check rejects a name that is not in the array" }
+
+""
 if ($failed -gt 0) { "$failed suite(s) failed"; exit 1 }
 'ALL SUITES PASSED'
 exit 0
