@@ -507,8 +507,31 @@ Game.KeyboardPlayerSkipPreventWindowDeactivate = false;
 // is repositioned immediately in "final preperations". At 10 that gave instance
 // 1 only 28 s from launch to resize while instance 0 had 45 s, and instance 1
 // crashed mid-resize with a C++ exception while still initialising. 25 puts the
-// last instance at roughly the same 43 s.
-Game.PauseBetweenStarts = 25;
+// last instance at roughly the same 43 s, which was enough for two instances.
+//
+// It is NOT enough for three. Measured from the debug log of the 11:38 run,
+// launch to reposition:
+//     instance 1  11:38:40 -> 11:39:40   60 s   survived
+//     instance 2  11:39:25 -> 11:40:25   60 s   survived
+//     instance 3  11:40:10 -> 11:40:52   42 s   crashed, at that exact second
+// and Nucleus then logged "ERROR - ResetWindows was unsuccessful for instance 2"
+// because the process had already gone. The 11:29 run is the same: instance 3
+// launched 11:30:36 and was gone by 11:31:17, 41 s, again at the reposition.
+//
+// So the last instance gets a third less grace than the two that survive, and it
+// dies at the moment it is resized. That also explains why its crash signature
+// keeps changing, which had looked like memory corruption: it has faulted in
+// h1_mp64_ship.exe with 0xc0000409, faulted in Steam's tier0_s64.dll with
+// 0xc0000005, and once exited with no fault at all. A resize forced on a
+// renderer that is still initialising lands wherever that instance happens to be
+// executing, so the reported module is essentially random.
+//
+// 45 gives the last instance 15 + 45 = 60 s, the same grace the survivors get.
+// Three instances therefore take about three minutes to come up rather than two.
+// There is no setting that delays only the final reposition; ProcessChangesAtEnd
+// moves all repositioning to the end but does not give the last instance any more
+// time, so this is the only lever.
+Game.PauseBetweenStarts = 45;
 
 // How long Nucleus waits after launching before it grabs the process, injects
 // ProtoInput and repositions the window. The base MWR handler needs 30 because
