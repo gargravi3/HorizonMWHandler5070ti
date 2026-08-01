@@ -84,7 +84,7 @@ function Listed([System.Text.RegularExpressions.Match]$m, [string]$name) {
     $body = ($m.Groups[1].Value -split "`n" | Where-Object { $_ -notmatch '^\s*//' }) -join "`n"
     return [bool]([regex]::IsMatch($body, '"' + [regex]::Escape($name) + '"'))
 }
-foreach ($f in @('toc0.dcache','toc1.dcache','data0.dcache','data1.dcache','cmr_history','imgui.ini')) {
+foreach ($f in @('toc0.dcache','toc1.dcache','data0.dcache','data1.dcache','cmr_history','imgui.ini','games_mp.log')) {
     if (Listed $copyBlock $f) { "  PASS  $f is hardcopied per instance" }
     else { "  FAIL  $f would be symlinked and shared by every instance"; $failed++ }
     if (Listed $exclBlock $f) { "  FAIL  $f is also excluded, so no instance would get it"; $failed++ }

@@ -518,7 +518,14 @@ Game.FileSymlinkCopyInstead = [
   "data0.dcache",
   "data1.dcache",
   "cmr_history",
-  "imgui.ini"
+  "imgui.ini",
+  // The match log. Missed when the list above was built, because it only appears
+  // in hmw-mod\logs rather than main\, and it is a symlink in every instance
+  // pointing at one physical file in the Steam install, so every instance appends
+  // to the same handle. Whether that can crash a starting instance is unproven,
+  // but it is the same defect class as the caches above and it also destroys the
+  // one log that says what each instance was doing.
+  "games_mp.log"
 ];
 
 Game.NeedsSteamEmulation = false;
@@ -815,7 +822,17 @@ Game.Play = function () {
   // -- 2. unique network port ----------------------------------------------
   // The engine uses net_port and net_port+1, hence the step of 2. Guests always
   // connect to the host's port, HMW_HOST_PORT.
-  var args = "-nosteam -multiplayer +set net_port " + (HMW_HOST_PORT + Context.PlayerID * 2);
+  // logfile 2 turns on the game's own console log and flushes it per line, so it
+  // survives a crash. Added because a starting instance now dies intermittently with
+  // the identical preset, cap and slice geometry that worked minutes earlier, and
+  // every account of these crashes has come from outside the game: a dump, an event
+  // log entry, or Nucleus reporting a failed injection into a process that had
+  // already exited. None of them say what the game was loading when it died.
+  //
+  // Passed on the command line rather than written to config_mp.cfg because logfile
+  // is not an archived dvar. Whether HMW honours it is unverified: look for
+  // console_mp.log alongside games_mp.log after a run.
+  var args = "-nosteam -multiplayer +set logfile 2 +set net_port " + (HMW_HOST_PORT + Context.PlayerID * 2);
   Game.StartArguments = args;
   Context.StartArguments = args;
   hmwLog("args: " + args);
