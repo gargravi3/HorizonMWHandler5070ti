@@ -79,7 +79,7 @@ if ((Get-VramByPid).Count -eq 0) {
 "baseline VRAM $baseline MiB of $vramTotal MiB"
 "sampling every ${IntervalSeconds}s for ${DurationMinutes}min -> $CsvPath"
 
-'time,instances,vram_used_mib,vram_total_mib,vram_per_instance_mib_measured,vram_instances_total_mib_measured,vram_per_instance_mib_derived,commit_used_gb,commit_limit_gb,physical_used_gb,physical_total_gb,private_bytes_gb_total,peak_instances' |
+'time,instances,vram_used_mib,vram_total_mib,vram_per_instance_mib_measured,vram_instances_total_mib_measured,vram_per_instance_mib_derived,commit_used_gb,commit_limit_gb,physical_used_gb,physical_total_gb,private_bytes_gb_total,working_set_gb_total,pages_input_per_sec,peak_instances' |
     Set-Content -LiteralPath $CsvPath -Encoding Ascii
 
 $deadline = (Get-Date).AddMinutes($DurationMinutes)
@@ -109,13 +109,24 @@ while ((Get-Date) -lt $deadline) {
     $physUsed    = ($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) * 1KB / 1GB
 
     $priv = 0
-    foreach ($p in $procs) { $priv += $p.PrivateMemorySize64 }
+    $ws = 0
+    foreach ($p in $procs) { $priv += $p.PrivateMemorySize64; $ws += $p.WorkingSet64 }
+
+    # Physical RAM sitting at 98% used is not by itself a problem: it means Windows has
+    # handed the pages out, not that anything is waiting on disk. Pages Input/sec is
+    # the number that decides it, because it counts hard faults, reads that actually
+    # went to the pagefile. Four instances measured 98% full with this at 0 while idle
+    # at a menu, which is why it needs sampling during a real match instead.
+    $pagesIn = 0
+    try {
+        $pagesIn = [int](Get-Counter '\Memory\Pages Input/sec' -ErrorAction Stop).CounterSamples[0].CookedValue
+    } catch { $pagesIn = '' }
 
     $perInstDerived = if ($n -gt 0 -and $null -ne $vram) { [math]::Round((($vram - $baseline) / $n), 0) } else { '' }
 
-    '{0},{1},{2},{3},{4},{5},{6},{7:N1},{8:N1},{9:N1},{10:N1},{11:N1},{12}' -f `
+    '{0},{1},{2},{3},{4},{5},{6},{7:N1},{8:N1},{9:N1},{10:N1},{11:N1},{12:N1},{13},{14}' -f `
         (Get-Date -Format 'HH:mm:ss'), $n, $vram, $vramTotal, $perInstMeasured, $mineMiB, $perInstDerived, `
-        $commitUsed, $commitLimit, $physUsed, $physTotal, ($priv/1GB), $peak |
+        $commitUsed, $commitLimit, $physUsed, $physTotal, ($priv/1GB), ($ws/1GB), $pagesIn, $peak |
         Add-Content -LiteralPath $CsvPath -Encoding Ascii
 
     Start-Sleep -Seconds $IntervalSeconds

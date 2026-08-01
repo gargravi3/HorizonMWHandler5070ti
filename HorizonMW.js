@@ -476,13 +476,17 @@ Game.HandlerInterval = 100;
 // This has to stay below the "Game definition" marker: the test harness executes
 // everything above that marker under a bare Jint engine with no Game object.
 // Ordered worst to best after Default, which stays first so it remains the default
-// selection. Minimum exists because Low, measured at about 3,750 MiB of video memory
-// per instance, leaves only ~530 MiB free with four instances running, and the third
-// instance to start hung with a black screen.
+// selection.
+//
+// Minimum was added because Low left the card at 97% with four instances up and the
+// third instance hung with a black screen. Measurement then showed Minimum does not
+// change video memory at all, 3,810 MiB per instance against Low's 3,791, so it is a
+// GPU-time and looks option like the rest. See Minimum.cfg for the numbers. Nothing
+// in this list decides whether four instances fit.
 var HMW_GRAPHICS_PRESETS = ["Default", "Minimum", "Low", "Medium", "High", "Extra"];
 Game.AddOption(
   "Graphics preset for every instance",
-  "Lower this when running more instances. Default leaves each instance's own settings alone. Presets are editable text files in handlers\\HorizonMW\\Graphics.",
+  "Affects how the game looks and how hard the GPU works. It does NOT change video memory use: Low, Minimum and a quarter-resolution render all measured ~3.8 GB per instance. Default leaves each instance's own settings alone. Presets are editable text files in handlers\\HorizonMW\\Graphics.",
   "Graphics",
   HMW_GRAPHICS_PRESETS
 );

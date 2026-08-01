@@ -549,11 +549,48 @@ Sizing guidance, for a 1080p display with four instances in a 2×2 grid:
 | 3 | 960×540 | 1.55 MP | 90 |
 | 4 | 960×540 | 2.07 MP | 60 |
 
-Note the preset matters more than the cap at four instances. Video memory was measured at 5,463 MiB
-per instance at `Default`, so four instances need about 22.5 GB against the 16.3 GB this card has, and
-`Low` is not optional there. The cap reduces GPU *time*, not GPU *memory*, so the two options solve
-different problems and neither substitutes for the other. Per-instance memory at `Low` has not been
-measured yet.
+The cap reduces GPU *time*, not GPU *memory*. That distinction survived measurement; the claim that
+used to sit here, that the preset matters more than the cap because four instances need about 22.5 GB
+of video memory, did not.
+
+**The graphics preset does not change video memory on this card.** Measured with four instances up,
+per-process `Dedicated Usage`:
+
+| Preset | Render | Per instance | Card |
+|---|---|---|---|
+| `Low` | 1440p | 3,791 MiB | 15,718 of 16,303 |
+| `Low` | 540p | 3,806 MiB | 15,796 of 16,303 |
+| `Minimum` | 540p, shadows off | 3,810 MiB | 15,789 of 16,303 |
+
+Cutting the render target to a seventh of the pixels moved it by 0.4%. Turning shadows, the shadow
+atlas, shadow-casting lights and dynamic lights off moved it by another 0.1%. The card lands at
+96-97% whatever the settings say, which reads as the game or the driver filling what is free with
+evictable caches rather than requiring ~3.8 GB per instance.
+
+The 5,463 MiB figure that used to be quoted here was two instances at `Default` divided by two, and
+the 22.5 GB projection multiplied that estimate by four. Both are withdrawn. Corroboration: the same
+game ran four instances on an 11 GB 2080 Ti with the same amount of system RAM, which fits "takes what
+is free" and does not fit a 3.8 GB requirement.
+
+**Confirmed against a prediction made before the measurement.** If each instance takes what is free
+rather than what it needs, then per-instance video memory should be roughly the card divided by the
+instance count, and the card should stay near 96% whatever that count is:
+
+| Instances | Card | Per instance | Predicted |
+|---|---|---|---|
+| 2 | 13,275 MiB | 6,342 MiB | — |
+| 3 | 15,299 MiB | 5,100 MiB | ~5,200 MiB |
+| 4 | 15,239 MiB | 3,810 MiB | — |
+
+Three instances were predicted at ~5,200 MiB each from the 2- and 4-instance figures, and measured at
+5,100. Watched live, two instances of a four-instance session exiting took the survivors from
+3,810 MiB each to 6,343 MiB each within seconds, without either of them loading anything.
+
+**So video memory does not decide how many instances fit, and a card at 96% is not a warning sign.**
+System RAM does scale with the instance count and is the number to watch: 20.9 GB of 31.2 with three
+instances, 30.6 GB with four.
+
+So pick a preset for how the game looks and for GPU time, not to make instances fit.
 
 ## FPS counter
 
