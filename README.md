@@ -652,32 +652,36 @@ the game has to be told to render smaller.
 | `r_fullscreen` | `0` | windowed, so the window can be sized to the slice |
 | `r_fullscreenWindow` | `0` | not borderless-fullscreen |
 | `r_aspectRatio` | `auto` | a 2560x720 slice is not 16:9 |
-| `r_renderResolutionNative` | `0` | so the count below is used |
-| `r_renderResolution` | `Width*Height/1e6` | render target sized to this instance's slice |
+| `r_renderResolutionNative` | `1` | render resolution follows the window |
 | `vid_xpos` / `vid_ypos` | `PosX` / `PosY` | correct on the first frame instead of waiting for Nucleus to move it |
 
 Two things worth knowing:
 
 - **`r_renderResolution` is a megapixel count**, not a scale. The install had `"3.6864"`, which is
-  exactly 2560x1440 / 1e6.
+  exactly 2560x1440 / 1e6. Editing it per instance would mean recomputing that float, so
+  `r_renderResolutionNative "1"` pins the render resolution to the window instead and the stale
+  value is left alone.
 
-  This used to pin `r_renderResolutionNative "1"` and leave the count alone, on the assumption that
-  "native" meant the window. **Nothing ever supported that assumption.** Every instance kept
-  `r_renderResolution "3.6864"` and `r_mode "2560x1440"` while displaying in a 960x540 window, and
-  Low measured about 3,750 MiB of video memory per instance, which is far too much for a
-  0.52 megapixel window with `picmip 3`. A 2560x1440 render target is seven times the pixels of that
-  window, and at four instances that difference is what left only 530 MiB free and hung the third
-  instance with a black screen.
+  **Sizing that count to the slice was tried and measured as worthless. Do not try it again without
+  new evidence.** Writing `r_renderResolutionNative "0"` plus `r_renderResolution "0.5184"` for a
+  960x540 slice, confirmed applied in all four instance configs and in the handler log, moved
+  per-instance video memory from **3,737 MiB to 3,791 MiB**: not at all.
 
-  The count is now computed per instance from the slice Nucleus reports: `960x540` gives `0.5184`,
-  `1280x720` gives `0.9216`, both exact. Because it is per-instance, no fixed value in a preset file
-  can be right for every slice, so both dvars are on the blocklist.
+  The measurement is `\GPU Process Memory(*)\Dedicated Usage` summed per PID, which agreed with
+  `\GPU Adapter Memory(*)\Dedicated Usage` (15,763 MiB) and with `nvidia-smi` (15,718 MiB) to within
+  1%. **Use `Dedicated Usage`, not `Local Usage`**: `Local Usage` reported 459 MiB per instance for
+  the same processes at the same moment, roughly an eighth of the truth, and an earlier single sample
+  of it also reported one instance at 4,685 MiB and its three siblings at ~800 MiB.
 
-  The prompt for looking was a fair question: a similar handler ran five instances on an 11 GB
-  2080 Ti. That handler wrote the tile size into the config, in HMW's hashed-name dvars
-  (`0x6E536C59 "1920"`, `0xF5470D48 "1200"`, which are real and present here). Whether HMW honours
-  `r_renderResolution` in windowed mode is still unverified; if it does not, the cost is a setting the
-  game ignores.
+  Two conclusions. Whatever holds ~3.8 GB per instance is **resolution independent**, so it is assets
+  rather than render targets, and the remaining levers are asset-side. And the reasoning behind the
+  attempt was wrong: a stale `"3.6864"` in the config was taken as proof the game was rendering at
+  1440p into a 960x540 window, when it only ever proved the handler had not rewritten that line.
+
+  The question that prompted it was still a fair one, and is still unanswered: a similar handler ran
+  five instances on an 11 GB 2080 Ti, about 2,200 MiB each. That handler wrote the tile size into
+  HMW's hashed-name dvars (`0x6E536C59 "1920"`, `0xF5470D48 "1200"`, which are real and present in
+  this install). On this evidence that is not where the saving came from.
 - **The Nucleus properties are `Context.PosX` and `Context.PosY`**, not `PositionX`/`PositionY`.
   Confirmed by reflection over `Nucleus.Gaming.dll`; `readme.txt` documents neither.
 

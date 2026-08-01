@@ -201,58 +201,31 @@ Check 'no dvar duplicated by the windowed pass' {
     ($keys | Group-Object | Where-Object { $_.Count -gt 1 }).Count -eq 0
 }
 # The render target is sized to the slice, so two instances with DIFFERENT slices
-# must now differ, and only in the render resolution. This check previously asserted
-# the opposite, that the windowed pass was geometry independent, which was correct
-# only while the handler wrongly assumed r_renderResolutionNative "1" already meant
-# the window size.
+# must end up with byte-identical render settings.
+#
+# This was briefly replaced by the opposite assertion, that the render resolution
+# follows the slice, while the handler wrote a per-slice megapixel count. That was
+# measured as worth nothing, 3,737 MiB per instance before against 3,791 MiB after,
+# and reverted, so the original assertion stands again. Anything geometry dependent
+# in this file means the instances no longer share one render configuration.
 $aPath = Join-Path $sandbox 'a.cfg'; $bPath = Join-Path $sandbox 'b.cfg'
 Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $aPath
 Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $bPath
-[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ", 960, 540);")
-[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $bPath) + ", 1280, 720);")
-Check 'render target follows the slice size'     {
-    ((Get-Content -LiteralPath $aPath | Where-Object { $_ -like 'seta r_renderResolution *' }) -eq 'seta r_renderResolution "0.5184"') -and
-    ((Get-Content -LiteralPath $bPath | Where-Object { $_ -like 'seta r_renderResolution *' }) -eq 'seta r_renderResolution "0.9216"')
+[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ");")
+[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $bPath) + ");")
+Check 'windowed pass is geometry independent'    {
+    (Get-FileHash $aPath).Hash -eq (Get-FileHash $bPath).Hash
 }
-Check 'native flag turned off so it is used'     {
-    (Get-Content -LiteralPath $aPath | Where-Object { $_ -like 'seta r_renderResolutionNative *' }) -eq 'seta r_renderResolutionNative "0"'
+Check 'render resolution left native'            {
+    (Get-Content -LiteralPath $aPath | Where-Object { $_ -like 'seta r_renderResolutionNative *' }) -eq 'seta r_renderResolutionNative "1"'
 }
-Check 'slices differ ONLY in render resolution'  {
-    $da = Get-Content -LiteralPath $aPath | Where-Object { $_ -notlike 'seta r_renderResolution *' }
-    $db = Get-Content -LiteralPath $bPath | Where-Object { $_ -notlike 'seta r_renderResolution *' }
-    $null -eq (Compare-Object $da $db)
+Check 'megapixel count not rewritten'            {
+    (Get-Content -LiteralPath $aPath | Where-Object { $_ -like 'seta r_renderResolution *' }) -eq 'seta r_renderResolution "3.6864"'
 }
 Check 'windowed pass is idempotent'              {
     $before = (Get-FileHash $aPath).Hash
-    [void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ", 960, 540);")
+    [void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ");")
     (Get-FileHash $aPath).Hash -eq $before
-}
-# The megapixel unit was reverse engineered from the install pairing
-# r_renderResolution "3.6864" with r_mode "2560x1440". If the conversion is wrong the
-# game gets a render target of the wrong size and nothing says so.
-foreach ($case in @(
-    @{ W = 960;  H = 540;  Expect = '0.5184' },
-    @{ W = 1280; H = 720;  Expect = '0.9216' },
-    @{ W = 1920; H = 1080; Expect = '2.0736' },
-    @{ W = 2560; H = 1440; Expect = '3.6864' },
-    @{ W = 2560; H = 720;  Expect = '1.8432' }
-)) {
-    Check "$($case.W)x$($case.H) is $($case.Expect) MP" {
-        [void]$engine.Execute("var mp = hmwRenderMegapixels($($case.W), $($case.H));")
-        $engine.GetValue('mp').ToObject() -eq $case.Expect
-    }
-}
-# No slice size means fall back to the old behaviour rather than writing "0" or "NaN".
-foreach ($bad in @('null', '0, 0', '"", ""', 'undefined, 540', '-960, 540')) {
-    Check "no render resolution for ($bad)"      {
-        $p = Join-Path $sandbox "nores-$([Guid]::NewGuid().ToString('N').Substring(0,6)).cfg"
-        Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $p
-        $args = if ($bad -eq 'null') { 'null, null' } else { $bad }
-        [void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $p) + ", $args);")
-        $c = Get-Content -LiteralPath $p
-        (($c | Where-Object { $_ -like 'seta r_renderResolutionNative *' }) -eq 'seta r_renderResolutionNative "1"') -and
-        (($c | Where-Object { $_ -like 'seta r_renderResolution *' }) -eq 'seta r_renderResolution "3.6864"')
-    }
 }
 
 # An instance set up by the version that crashed still has the off-screen
@@ -268,7 +241,7 @@ $stalePath = Join-Path $sandbox 'stale.cfg'
     'seta vid_xpos "0"',
     'seta vid_ypos "720"'
 ) -join "`r`n" | Set-Content -LiteralPath $stalePath -Encoding Ascii -NoNewline
-[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $stalePath) + ", 960, 540);")
+[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $stalePath) + ");")
 $staleCfg = Get-Content -LiteralPath $stalePath
 Check 'stale off-screen vid_ypos is undone'      {
     (@($staleCfg | Where-Object { $_ -eq 'seta vid_ypos "-1"' }).Count -eq 1) -and
@@ -402,7 +375,7 @@ Check 'blocklist is what stops r_fullscreen'     {
 }
 Check 'blocklist restored after that check'      {
     [void]$engine.Execute('var blockedCount = HMW_PRESET_BLOCKED.length;')
-    [int]$engine.GetValue('blockedCount').ToObject() -eq 9
+    [int]$engine.GetValue('blockedCount').ToObject() -eq 7
 }
 Check 'blocked dvars are logged'                 {
     (Get-Content -LiteralPath $logPath -Raw) -match 'ignored r_fullscreen, vid_ypos, name'
