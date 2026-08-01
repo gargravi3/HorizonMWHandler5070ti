@@ -187,7 +187,10 @@ var HMW_PRESET_BLOCKED = [
   "r_mode",
   "vid_xpos",
   "vid_ypos",
-  "name"
+  "name",
+  // Owned by the Frame cap dropdown. No shipped preset sets it, but a hand-edited
+  // one silently overriding the dropdown would be very hard to spot.
+  "com_maxfps"
 ];
 
 function hmwPresetBlocked(dvar) {
@@ -261,6 +264,32 @@ function hmwRevertGraphicsPreset(cfgPath, presetDir, srcCfg) {
   }
   hmwLog("graphics Default: restored " + reverted + " preset-managed dvar(s) from the install config");
   return reverted;
+}
+
+// Writes the frame cap chosen in Nucleus. Applied after the graphics preset so a
+// preset can never win, and validated against HMW_FRAME_CAPS because an unchecked
+// value goes straight into config_mp.cfg: com_maxfps "" or com_maxfps "abc" would
+// be the game's problem to interpret, and a nonsense cap is indistinguishable from
+// a GPU that cannot keep up.
+function hmwApplyFrameCap(cfgPath, cap, allowed) {
+  var choice = null;
+  for (var i = 0; i < allowed.length; i++) {
+    if (("" + cap) === allowed[i]) {
+      choice = allowed[i];
+      break;
+    }
+  }
+
+  if (choice === null) {
+    // Falling back rather than skipping, because skipping leaves com_maxfps "0",
+    // and uncapped is the setting this option exists to prevent.
+    choice = allowed[0];
+    hmwLog("frame cap: no valid selection ('" + cap + "'), falling back to " + choice + " fps");
+  }
+
+  hmwSetCfgValue(cfgPath, "seta com_maxfps", choice);
+  hmwLog("frame cap: com_maxfps " + choice);
+  return choice;
 }
 
 function hmwApplyGraphicsPreset(cfgPath, preset, presetDir, srcCfg) {
@@ -406,6 +435,26 @@ Game.AddOption(
   HMW_GRAPHICS_PRESETS
 );
 
+// Frame cap, applied to every instance. This is the largest GPU saving available
+// here and it costs nothing visually. The install config ships com_maxfps "0",
+// meaning uncapped, so each instance renders as fast as it can and several of them
+// compete for one GPU producing frames no one can see. On a 240 Hz display four
+// uncapped instances would be asking for up to 960 frames a second.
+//
+// The offered values all divide 240 exactly, so frames land on refresh boundaries:
+// 240/4 = 60, 240/2 = 120 near 144, and so on. 60 is first, and therefore the
+// default, because it is the safest choice for four-way splitscreen.
+//
+// Note this leaves no way to select uncapped from the dropdown, which is
+// deliberate: uncapped is the setting that causes the problem.
+var HMW_FRAME_CAPS = ["60", "90", "144", "240"];
+Game.AddOption(
+  "Frame cap per instance (fps)",
+  "Caps com_maxfps in every instance. Lower is a large GPU saving at no visual cost, and matters most with 3 or more instances. All values divide 240 evenly.",
+  "FrameCap",
+  HMW_FRAME_CAPS
+);
+
 // hmw-mod.exe is both launcher and game process. Game.LauncherExe is left unset
 // on purpose: if LauncherExe and ExecutableName name the same binary, Nucleus
 // starts a process then searches by name for a process to attach to, which is
@@ -546,7 +595,7 @@ Game.KillProcessesOnClose = [];
 
 // Legacy hooks: all off, ProtoInput does the input work.
 Game.Hook.ForceFocus = false;
-Game.Hook.ForceFocusWindowName = "Call of Duty®: Modern Warfare® Remastered Multiplayer";
+Game.Hook.ForceFocusWindowName = "Call of DutyÂ®: Modern WarfareÂ® Remastered Multiplayer";
 Game.FakeFocus = false;
 Game.HookFocus = false;
 Game.BlockRawInput = false;
@@ -806,6 +855,14 @@ Game.Play = function () {
     Context.Options["Graphics"],
     Context.ScriptFolder + "\\Graphics",
     srcP2 + "\\config_mp.cfg"
+  );
+
+  // -- 4d. frame cap chosen in the Nucleus options menu ----------------------
+  // After the preset, so the dropdown is the last word on com_maxfps.
+  hmwApplyFrameCap(
+    players2 + "\\config_mp.cfg",
+    Context.Options["FrameCap"],
+    HMW_FRAME_CAPS
   );
 
   // Two separate ceilings limit how many instances fit, and only one of them is

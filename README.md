@@ -501,6 +501,41 @@ does break all three, so the guard is doing real work.
 Preset application runs *after* the windowed-mode and FPS passes, so a preset can override things
 like `r_renderResolutionNative`, but not the blocked list.
 
+## Frame cap
+
+Nucleus game options menu, **"Frame cap per instance (fps)"**: `60`, `90`, `144`, `240`. Written to
+every instance as `com_maxfps`. `60` is first and therefore the default.
+
+This is the largest GPU saving available in the handler and it costs nothing visually. The install
+config ships `com_maxfps "0"`, meaning uncapped, so each instance renders as fast as it can and
+several instances compete for one GPU producing frames nobody sees. On a 240 Hz display, four
+uncapped instances are asking for up to 960 frames a second.
+
+Every offered value divides 240 exactly, so frames land on refresh boundaries: `240/4 = 60`,
+`240/2 = 120` near the `144` entry. There is deliberately **no uncapped choice**, because uncapped is
+the setting the option exists to prevent. An unrecognised or missing selection falls back to `60`
+with a log line rather than being written through, for the same reason: skipping would leave
+`com_maxfps "0"`, and `com_maxfps "abc"` in a config is indistinguishable from a GPU that cannot keep
+up, which is a miserable thing to diagnose.
+
+`com_maxfps` is on the preset blocklist, so a hand-edited preset file cannot quietly outrank the
+dropdown, and the cap is applied *after* the preset pass so the dropdown is the last word. Both
+properties have tests, including one that reverses the order and requires a failure.
+
+Sizing guidance, for a 1080p display with four instances in a 2×2 grid:
+
+| Instances | Each window | Total pixels/frame | Suggested cap |
+|---|---|---|---|
+| 2 | 960×1080 | 2.07 MP | 120 or 144 |
+| 3 | 960×540 | 1.55 MP | 90 |
+| 4 | 960×540 | 2.07 MP | 60 |
+
+Note the preset matters more than the cap at four instances. Video memory was measured at 5,463 MiB
+per instance at `Default`, so four instances need about 22.5 GB against the 16.3 GB this card has, and
+`Low` is not optional there. The cap reduces GPU *time*, not GPU *memory*, so the two options solve
+different problems and neither substitutes for the other. Per-instance memory at `Low` has not been
+measured yet.
+
 ## FPS counter
 
 On in every instance by default. Set `HMW_SHOW_FPS = false` at the top of `HorizonMW.js` to leave

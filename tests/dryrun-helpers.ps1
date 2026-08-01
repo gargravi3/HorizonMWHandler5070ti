@@ -363,7 +363,7 @@ Check 'blocklist is what stops r_fullscreen'     {
 }
 Check 'blocklist restored after that check'      {
     [void]$engine.Execute('var blockedCount = HMW_PRESET_BLOCKED.length;')
-    [int]$engine.GetValue('blockedCount').ToObject() -eq 6
+    [int]$engine.GetValue('blockedCount').ToObject() -eq 7
 }
 Check 'blocked dvars are logged'                 {
     (Get-Content -LiteralPath $logPath -Raw) -match 'ignored r_fullscreen, vid_ypos, name'
@@ -379,6 +379,73 @@ Check 'preset is idempotent'                     {
     $once = Get-Content -LiteralPath $lowCfg -Raw
     [void](ApplyPreset 'Low' $lowCfg)
     (Get-Content -LiteralPath $lowCfg -Raw) -eq $once
+}
+
+# --- frame cap ---------------------------------------------------------------
+# HMW_FRAME_CAPS itself lives below the Game definition marker, so the allowed
+# list is injected here and asserted against the source file further down.
+$caps = @('60', '90', '144', '240')
+$capsJs = ConvertTo-Json $caps
+function ApplyCap([string]$cfg, $selection) {
+    $js = "var chosen = hmwApplyFrameCap(" + (ConvertTo-Json $cfg) + ", " +
+          (ConvertTo-Json $selection) + ", " + $capsJs + ");"
+    [void]$engine.Execute($js)
+    return [string]$engine.GetValue('chosen').ToObject()
+}
+
+$capCfg = Join-Path $sandbox 'framecap.cfg'
+'seta com_maxfps "0"' | Set-Content -LiteralPath $capCfg -Encoding Ascii
+Check 'cap 144 is written'                       {
+    (ApplyCap $capCfg '144') -eq '144' -and
+    ((PresetCfg $capCfg 'seta com_maxfps') -eq 'seta com_maxfps "144"')
+}
+Check 'uncapped install value is replaced'       { (PresetCfg $capCfg 'seta com_maxfps').Count -eq 1 }
+Check 'cap is idempotent'                        {
+    $once = Get-Content -LiteralPath $capCfg -Raw
+    [void](ApplyCap $capCfg '144')
+    (Get-Content -LiteralPath $capCfg -Raw) -eq $once
+}
+Check 'every offered cap is accepted'            {
+    $ok = $true
+    foreach ($c in $caps) {
+        if ((ApplyCap $capCfg $c) -ne $c) { $ok = $false }
+        if ((PresetCfg $capCfg 'seta com_maxfps') -ne "seta com_maxfps `"$c`"") { $ok = $false }
+    }
+    $ok
+}
+# A junk selection must never reach config_mp.cfg. com_maxfps "abc" would be the
+# game's problem to interpret, and a nonsense cap looks exactly like a GPU that
+# cannot keep up, which is the hardest kind of bug to attribute.
+foreach ($bad in @('abc', '', '0', '61', '144 ')) {
+    $label = if ($bad -eq '') { '(empty)' } else { "'$bad'" }
+    Check "junk cap $label falls back to 60"     {
+        ((ApplyCap $capCfg $bad) -eq '60') -and
+        ((PresetCfg $capCfg 'seta com_maxfps') -eq 'seta com_maxfps "60"')
+    }
+}
+Check 'fallback is logged, not silent'           {
+    (Get-Content -LiteralPath $logPath -Raw) -match "frame cap: no valid selection \('abc'\), falling back to 60 fps"
+}
+# Falling back rather than skipping matters: skipping would leave com_maxfps "0",
+# and uncapped is the exact setting the dropdown exists to prevent.
+Check 'junk never leaves the cap uncapped'       {
+    'seta com_maxfps "0"' | Set-Content -LiteralPath $capCfg -Encoding Ascii
+    [void](ApplyCap $capCfg 'nonsense')
+    (PresetCfg $capCfg 'seta com_maxfps') -ne 'seta com_maxfps "0"'
+}
+# com_maxfps is on the blocklist, so a hand-edited preset cannot quietly outrank
+# the dropdown.
+Check 'a preset cannot override the cap'         {
+    $capPresetDir = Join-Path $sandbox 'GraphicsCap'
+    New-Item -ItemType Directory -Path $capPresetDir -Force | Out-Null
+    'seta com_maxfps "500"' | Set-Content -LiteralPath (Join-Path $capPresetDir 'Low.cfg') -Encoding Ascii
+    $fightCfg = Join-Path $sandbox 'framecap-fight.cfg'
+    'seta com_maxfps "0"' | Set-Content -LiteralPath $fightCfg -Encoding Ascii
+    $js = "hmwApplyGraphicsPreset(" + (ConvertTo-Json $fightCfg) + ", 'Low', " +
+          (ConvertTo-Json $capPresetDir) + ", " + (ConvertTo-Json (Join-Path $srcP2 'config_mp.cfg')) + ");"
+    [void]$engine.Execute($js)
+    [void](ApplyCap $fightCfg '90')
+    (PresetCfg $fightCfg 'seta com_maxfps') -eq 'seta com_maxfps "90"'
 }
 
 # Every shipped preset must parse, apply cleanly, and never trip the blocklist.
@@ -408,6 +475,34 @@ Check 'dropdown names all have a preset file'    {
         ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ -and $_ -ne 'Default' }
     $missing = $declared | Where-Object { -not (Test-Path (Join-Path $shippedDir "$_.cfg")) }
     (@($declared).Count -eq 4) -and (@($missing).Count -eq 0)
+}
+
+# The dropdown wiring lives below the Game definition marker, where the Jint
+# prelude cannot reach it, so assert it against the source text.
+Check 'frame cap dropdown offers 60/90/144/240' {
+    $declared = ([regex]::Match($src,
+        'HMW_FRAME_CAPS\s*=\s*\[(.*?)\]').Groups[1].Value -split ',') |
+        ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ }
+    (Compare-Object $declared @('60', '90', '144', '240') -SyncWindow 0) -eq $null
+}
+Check 'frame cap is bound to the FrameCap key'   {
+    # [^;]*? rather than [^)]*: the option label contains "(fps)", so a
+    # paren-excluding pattern never reaches the key and the check passed vacuously.
+    $src -match '(?s)Game\.AddOption\([^;]*?"FrameCap",\s*HMW_FRAME_CAPS'
+}
+# Ordering is load-bearing: a preset applied afterwards could overwrite the cap.
+# Compared inside Play only, because both functions are *defined* earlier in the
+# file and in the opposite order, so a whole-file IndexOf compares declarations
+# rather than call sites and always fails.
+Check 'cap is applied after the graphics preset' {
+    $playBody = $src.Substring($src.IndexOf('Game.Play = function'))
+    $presetCall = $playBody.IndexOf('hmwApplyGraphicsPreset' + '(')
+    $capCall    = $playBody.IndexOf('hmwApplyFrameCap' + '(')
+    ($presetCall -ge 0) -and ($capCall -gt $presetCall)
+}
+Check 'com_maxfps is reserved from presets'      {
+    ([regex]::Match($src, 'HMW_PRESET_BLOCKED\s*=\s*\[(.*?)\]',
+        'Singleline').Groups[1].Value) -match '"com_maxfps"'
 }
 
 Check 'hwgd.pf is exactly 39 bytes'             { (Get-Item -LiteralPath (Join-Path $p2 'hwgd.pf')).Length -eq 39 }
