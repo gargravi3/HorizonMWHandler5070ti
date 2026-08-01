@@ -162,7 +162,23 @@ function hmwApplyFpsCounter(cfgPath) {
 //
 // Called on every launch rather than only when players2 is seeded, for the same
 // reason.
-function hmwApplyWindowedMode(cfgPath) {
+// Reads one dvar's value out of a config file, or null if the file or dvar is absent.
+function hmwCfgValue(cfgPath, dvar) {
+  if (!System.IO.File.Exists(cfgPath)) {
+    return null;
+  }
+  var lines = System.IO.File.ReadAllLines(cfgPath);
+  var re = new RegExp("^seta\\s+" + dvar + "\\s+\"([^\"]*)\"\\s*$");
+  for (var i = 0; i < lines.length; i++) {
+    var m = re.exec("" + lines[i]);
+    if (m) {
+      return m[1];
+    }
+  }
+  return null;
+}
+
+function hmwApplyWindowedMode(cfgPath, srcCfg) {
   hmwSetCfgValue(cfgPath, "seta r_fullscreen", "0");
   hmwSetCfgValue(cfgPath, "seta r_fullscreenWindow", "0");
   hmwSetCfgValue(cfgPath, "seta r_aspectRatio", "auto");
@@ -185,6 +201,22 @@ function hmwApplyWindowedMode(cfgPath) {
   // The game also reported an in-game resolution with a height well under the slice
   // once the count was applied, so the change was plausibly a downgrade as well.
   hmwSetCfgValue(cfgPath, "seta r_renderResolutionNative", "1");
+
+  // Undo the per-slice count if a previous version of this handler left one behind.
+  // The game accepted "0.5184" and wrote it straight back out on exit, so it survives
+  // in every instance config that ran that version. Pinning the native flag and
+  // assuming the stale count is therefore ignored would repeat the exact mistake that
+  // produced it, so the count is restored from the install config instead. Same
+  // reasoning as the off-screen vid_ypos: stop writing a bad value is not the same as
+  // undoing it.
+  if (srcCfg) {
+    var installed = hmwCfgValue(srcCfg, "r_renderResolution");
+    if (installed !== null && installed !== hmwCfgValue(cfgPath, "r_renderResolution")) {
+      hmwSetCfgValue(cfgPath, "seta r_renderResolution", installed);
+      hmwLog("render resolution left native, megapixel count restored to " + installed + " from the install config");
+    }
+  }
+
   hmwSetCfgValue(cfgPath, "seta vid_xpos", "-1");
   hmwSetCfgValue(cfgPath, "seta vid_ypos", "-1");
   return true;
@@ -874,7 +906,7 @@ Game.Play = function () {
   hmwSetCfgValue(players2 + "\\config_mp.cfg", "seta name", "Player" + playerNo);
 
   // -- 4b. windowed mode, so Nucleus can size the window to the slice --------
-  hmwApplyWindowedMode(players2 + "\\config_mp.cfg");
+  hmwApplyWindowedMode(players2 + "\\config_mp.cfg", srcP2 + "\\config_mp.cfg");
   hmwApplyFpsCounter(players2 + "\\config_mp.cfg");
 
   // -- 4c. graphics preset chosen in the Nucleus options menu ----------------

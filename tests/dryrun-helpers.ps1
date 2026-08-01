@@ -104,7 +104,7 @@ hmwSetCfgValue(players2 + '\\keys_mp.cfg', 'bind ' + HMW_CONNECT_BIND_KEY,
 // re-seeding must not clobber the edit
 hmwSeedFile(srcP2 + '\\config_mp.cfg', players2 + '\\config_mp.cfg');
 
-hmwApplyWindowedMode(players2 + '\\config_mp.cfg');
+hmwApplyWindowedMode(players2 + '\\config_mp.cfg', srcP2 + '\\config_mp.cfg');
 hmwApplyFpsCounter(players2 + '\\config_mp.cfg');
 
 hmwWriteGuid(players2 + '\\hwgd.pf', '{00000000-0000-4000-8000-000000000002}');
@@ -209,10 +209,11 @@ Check 'no dvar duplicated by the windowed pass' {
 # and reverted, so the original assertion stands again. Anything geometry dependent
 # in this file means the instances no longer share one render configuration.
 $aPath = Join-Path $sandbox 'a.cfg'; $bPath = Join-Path $sandbox 'b.cfg'
+$srcCfgPath = Join-Path $srcP2 'config_mp.cfg'
 Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $aPath
 Copy-Item -LiteralPath (Join-Path $srcP2 'config_mp.cfg') -Destination $bPath
-[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ");")
-[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $bPath) + ");")
+[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ", " + (ConvertTo-Json $srcCfgPath) + ");")
+[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $bPath) + ", " + (ConvertTo-Json $srcCfgPath) + ");")
 Check 'windowed pass is geometry independent'    {
     (Get-FileHash $aPath).Hash -eq (Get-FileHash $bPath).Hash
 }
@@ -222,9 +223,36 @@ Check 'render resolution left native'            {
 Check 'megapixel count not rewritten'            {
     (Get-Content -LiteralPath $aPath | Where-Object { $_ -like 'seta r_renderResolution *' }) -eq 'seta r_renderResolution "3.6864"'
 }
+# Every instance that ran the per-slice version has "0.5184" on disk, because the
+# game accepted it and wrote it back out on exit. Pinning the native flag does not
+# remove it, so the handler has to restore the install value actively.
+Check 'per-slice residue is undone'              {
+    $p = Join-Path $sandbox 'residue.cfg'
+    Copy-Item -LiteralPath $srcCfgPath -Destination $p
+    # Built in a variable, not inline: inside a method call PowerShell reads the comma
+    # in -replace 'a','b' as an argument separator, so WriteAllLines gets three
+    # arguments, throws, and the seeding silently does not happen.
+    $seed = @(Get-Content -LiteralPath $p) -replace '^seta r_renderResolution "[^"]*"$', 'seta r_renderResolution "0.5184"'
+    $seed = $seed -replace '^seta r_renderResolutionNative "[^"]*"$', 'seta r_renderResolutionNative "0"'
+    Set-Content -LiteralPath $p -Value $seed -Encoding Ascii
+    $seeded = @(Get-Content -LiteralPath $p | Where-Object { $_ -eq 'seta r_renderResolution "0.5184"' }).Count -eq 1
+    [void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $p) + ", " + (ConvertTo-Json $srcCfgPath) + ");")
+    $c = Get-Content -LiteralPath $p
+    $seeded -and
+    (($c | Where-Object { $_ -like 'seta r_renderResolution *' }) -eq 'seta r_renderResolution "3.6864"') -and
+    (($c | Where-Object { $_ -like 'seta r_renderResolutionNative *' }) -eq 'seta r_renderResolutionNative "1"') -and
+    (@($c | Where-Object { $_ -like 'seta r_renderResolution *' }).Count -eq 1)
+}
+Check 'no install config means no rewrite'       {
+    $p = Join-Path $sandbox 'nosrc.cfg'
+    Copy-Item -LiteralPath $srcCfgPath -Destination $p
+    [IO.File]::WriteAllLines($p, (@(Get-Content -LiteralPath $p) -replace '^seta r_renderResolution "[^"]*"$', 'seta r_renderResolution "0.5184"'))
+    [void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $p) + ", " + (ConvertTo-Json (Join-Path $sandbox 'absent.cfg')) + ");")
+    (Get-Content -LiteralPath $p | Where-Object { $_ -like 'seta r_renderResolution *' }) -eq 'seta r_renderResolution "0.5184"'
+}
 Check 'windowed pass is idempotent'              {
     $before = (Get-FileHash $aPath).Hash
-    [void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ");")
+    [void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $aPath) + ", " + (ConvertTo-Json $srcCfgPath) + ");")
     (Get-FileHash $aPath).Hash -eq $before
 }
 
@@ -241,7 +269,7 @@ $stalePath = Join-Path $sandbox 'stale.cfg'
     'seta vid_xpos "0"',
     'seta vid_ypos "720"'
 ) -join "`r`n" | Set-Content -LiteralPath $stalePath -Encoding Ascii -NoNewline
-[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $stalePath) + ");")
+[void]$engine.Execute("hmwApplyWindowedMode(" + (ConvertTo-Json $stalePath) + ", " + (ConvertTo-Json $srcCfgPath) + ");")
 $staleCfg = Get-Content -LiteralPath $stalePath
 Check 'stale off-screen vid_ypos is undone'      {
     (@($staleCfg | Where-Object { $_ -eq 'seta vid_ypos "-1"' }).Count -eq 1) -and
