@@ -121,6 +121,28 @@ Two more things are outside the handler by design: **the identity files** in
 first launch and restored on stop, and **the graphics presets themselves**, which are editable text
 files under `handlers\HorizonMW\Graphics\`.
 
+#### Not every setting is in config_mp.cfg, which makes divergence invisible
+
+Instance 1 rendered the map Rust noticeably warmer and darker than instances 2-4 for a whole session.
+The cause was the **colour blind filter, switched on in that one instance's own accessibility
+settings**, and it was fixed in the game's menu.
+
+Worth recording because of where that setting lives. All four `config_mp.cfg` held **309 identical
+dvars**, differing only in `name` and `vid_xpos`, and HorizonMW stores no gamma, brightness or film
+dvar there at all. The setting is in **`players2\user\hmwcdta`**, an opaque binary with no readable
+strings: the host's copy went from 243 to 238 bytes the moment the filter was switched off.
+
+So a config diff cannot see it, and neither can a whole-tree file comparison in any useful way, because
+`hmwcdta` and `hmwdta` differ between all four instances all of the time as ordinary per-player state.
+That is exactly how this was missed: the difference was noticed early, dismissed on the reasoning that a
+file differing across all four could not explain a fault in only one, and the search moved on to
+vision sets and film tweaks. The file that differed was the file that mattered.
+
+The practical lesson for anything visual that affects one instance only: **check that instance's own
+in-game settings first**, including the accessibility page, before looking for a cause in the handler,
+the configs or the driver. Per-instance in-game settings are independent by design, and the ones stored
+in `hmwcdta` leave no trace a text diff can find.
+
 ### Settings deliberately not used
 
 | | Why |
