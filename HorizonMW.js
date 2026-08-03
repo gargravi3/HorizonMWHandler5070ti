@@ -643,7 +643,18 @@ Game.KeyboardPlayerSkipPreventWindowDeactivate = false;
 // There is no setting that delays only the final reposition; ProcessChangesAtEnd
 // moves all repositioning to the end but does not give the last instance any more
 // time, so this is the only lever.
-Game.PauseBetweenStarts = 45;
+//
+// Only the LAST instance needs the full 45 though. Every other instance is
+// repositioned when the NEXT one is grabbed, a whole launch cycle later, so it
+// already gets far more grace than it needs and the pause is just dead time.
+// Play() therefore sets this per instance. With PromptBeforeProcessGrab on and a
+// 5 s grab pause, a non-last instance is repositioned roughly
+//     click (~18 s) + 5 + HMW_PAUSE_AFTER_OTHERS + overhead (~5) + next click (~18) + 5
+// after its own launch, which is about 66 s at 15 - still above the 60 s that
+// survives and well clear of the 42 s that crashed.
+var HMW_PAUSE_AFTER_LAST = 45;
+var HMW_PAUSE_AFTER_OTHERS = 15;
+Game.PauseBetweenStarts = HMW_PAUSE_AFTER_LAST;
 
 // How long Nucleus waits after launching before it grabs the process, injects
 // ProtoInput and repositions the window. The base MWR handler needs 30 because
@@ -651,7 +662,33 @@ Game.PauseBetweenStarts = 45;
 // process from the start, so it does not need anywhere near that long, and 30
 // left the windows sitting unpositioned for half a minute. Raise this again if
 // an instance gets grabbed before its window exists.
-Game.PauseBetweenProcessGrab = 15;
+//
+// 15 was chosen when this was the only thing standing between the launch and the
+// grab, and it was marginal: measured with the prompt below, the window actually
+// appears 16-23 s after launch, so the timer was firing just before the window on
+// a bad run. PromptBeforeProcessGrab now guarantees the window exists before this
+// pause even starts, so the pause no longer has to cover window creation and only
+// needs to let the game settle. 5 makes the grab land at click + 5, i.e. roughly
+// 21-28 s after launch, which is LATER than the old fixed 15 - lowering this is
+// safer than the timing it replaces, not riskier.
+Game.PauseBetweenProcessGrab = 5;
+
+// The grab above is a fixed timer with no check that the window it finds belongs
+// to the game. hmw-mod.exe shows a loader window titled "HMW" and only swaps to
+// "HorizonMW v1.6.7" at roughly the 15 s mark, so the timer sits exactly on that
+// boundary. In the 21:52 run instance 2 was grabbed while still on the loader:
+// Nucleus stored handle 264304, that window was destroyed moments later, and the
+// live window became 460980. The other three instances' stored handles matched
+// their live windows exactly. That instance rendered and joined normally but its
+// controller never worked, because ProtoInput's focus hooks (FocusHooks below)
+// were bound to a window that no longer existed. Repositioning still worked,
+// since Nucleus re-resolves by pid later, so the only visible symptom was the
+// dead gamepad.
+//
+// Nucleus shows this prompt BEFORE the PauseBetweenProcessGrab sleep, so waiting
+// to click OK until the window reads "HorizonMW v1.6.7" removes the race rather
+// than making it less likely. The cost is one click per instance.
+Game.PromptBeforeProcessGrab = true;
 
 Game.StartArguments = "-nosteam -multiplayer";
 Game.KillProcessesOnClose = [];
@@ -868,6 +905,19 @@ Game.Play = function () {
   var playerNo = Context.PlayerID + 1;
 
   hmwLog("=== Play() instance " + Context.PlayerID + " -> " + instFolder);
+
+  // -- 0. pace the rest of the launch ----------------------------------------
+  // Nucleus reads PauseBetweenStarts after Play() returns, so setting it here
+  // applies to the pause that follows THIS launch. See the comment on
+  // HMW_PAUSE_AFTER_LAST: only the final instance needs the long one, because it
+  // is the only instance repositioned immediately in "final preperations".
+  // If this write turns out not to reach Nucleus, the value simply stays at
+  // HMW_PAUSE_AFTER_LAST for every instance, which is the old, safe behaviour.
+  // Verify from the debug log: it prints "Pausing for N seconds" each time.
+  var hmwIsLastInstance = (Context.PlayerID === Context.NumberOfPlayers - 1);
+  Game.PauseBetweenStarts = hmwIsLastInstance ? HMW_PAUSE_AFTER_LAST : HMW_PAUSE_AFTER_OTHERS;
+  hmwLog("pause after this launch: " + Game.PauseBetweenStarts + " s" +
+         (hmwIsLastInstance ? " (last instance: full reposition grace)" : ""));
 
   // -- 1. real copy of the executable ---------------------------------------
   // HMW writes next to hmw-mod.exe and self-updates, so a symlink is not enough.
